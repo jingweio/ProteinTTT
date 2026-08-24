@@ -1,0 +1,9 @@
+f9ca949186bc090ef56452729450684c08f82476
+^ commit of /home/guoj0f/repos/ProteinGym these two files were copied from (branch: analysis).
+  DMS_substitutions.csv                      <- reference_files/
+  DMS_substitutions_Spearman_DMS_level.csv   <- benchmarks/DMS_zero_shot/substitutions/Spearman/
+Assay CSVs (1.0 GB, 217 files) are NOT here; they live in the shared area:
+  local  /home/guoj0f/share/ProteinGym/DMS_ProteinGym_substitutions/
+  remote /data/guoj0f/share/ProteinGym/DMS_ProteinGym_substitutions/
+  source https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3/DMS_ProteinGym_substitutions.zip
+  sha256 3a83766254ac9ac9984ec25cb73c6e010ea4418f5e35f143933e6b6e6473b921  (matches ProteinGym's own manifest)

@@ -137,3 +137,8 @@ dmypy.json
 # VSCode
 *.vscode
 data/*
+# workstation-records: keep scripts + result markdown, drop bulk artefacts
+workstation-records/**/*.out
+workstation-records/**/*.err
+workstation-records/**/results/*.csv
+workstation-records/**/results/*.pkl

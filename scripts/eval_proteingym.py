@@ -38,10 +38,9 @@ MODELS = {
     "esm2_t33_650M_UR50D": DEFAULT_ESM2_650M_TTT_CFG,
 }
 
-# ProteinGym resolves both of these from the reference file; for
-# reference_files/DMS_substitutions.csv neither `start_idx` nor
-# `DMS_mutant_column` is present, so the defaults below are what it uses.
-OFFSET_IDX = 1
+# ProteinGym resolves `mutant_col` from the reference file; for
+# reference_files/DMS_substitutions.csv `DMS_mutant_column` is absent, so this
+# is what it falls back to.
 MUTANT_COL = "mutant"
 
 # ESM2 / ProteinGym context window.  Matches TTTConfig.crop_size.
@@ -89,13 +88,29 @@ def compute_token_probs(model, alphabet, seq, device, batch_size):
     return out
 
 
-def score_mutants(mutants, seq, token_probs, alphabet):
+def target_region(row):
+    """The sequence ProteinGym actually scores, plus its 1-based offset.
+
+    compute_fitness.py truncates `target_seq` to the MSA-covered region whenever
+    that region is not the whole sequence.  Only 5 of the 217 substitution assays
+    are affected (all with seq_len > 1024), but for those it is the difference
+    between reproducing the published per-assay Spearman and missing it by up to
+    0.23 -- the model simply sees a different context for the mutated positions.
+    """
+    seq = row["target_seq"].upper()
+    msa_start, msa_end = int(row["MSA_start"]), int(row["MSA_end"])
+    if msa_start != 1 or msa_end != len(seq):
+        return seq[msa_start - 1 : msa_end], msa_start
+    return seq, 1
+
+
+def score_mutants(mutants, seq, token_probs, alphabet, offset_idx):
     """ProteinGym `label_row`: summed log-odds ratio over mutated positions."""
     scores = []
     for mutant in mutants:
         total = 0.0
         for sub in str(mutant).split(":"):
-            wt, idx, mt = sub[0], int(sub[1:-1]) - OFFSET_IDX, sub[-1]
+            wt, idx, mt = sub[0], int(sub[1:-1]) - offset_idx, sub[-1]
             assert seq[idx] == wt, (
                 f"listed wildtype {wt} does not match sequence at {idx}: {seq[idx]}"
             )
@@ -209,7 +224,7 @@ def main():
             print(f"[{n + 1}/{len(ref)}] {dms_id}: exists, skip", flush=True)
             continue
 
-        seq = row["target_seq"].upper()
+        seq, offset_idx = target_region(row)
         df = pd.read_csv(args.dms_dir / row["DMS_filename"])
         t0 = time.time()
 
@@ -219,6 +234,7 @@ def main():
         rec = dict(
             dms_id=dms_id,
             seq_len=len(seq),
+            offset_idx=offset_idx,
             n_variants=int(len(df)),
             mode=args.mode,
             seed=args.seed if args.mode == "ttt" else None,
@@ -227,7 +243,9 @@ def main():
             pre = compute_token_probs(
                 model, alphabet, seq, device, args.score_batch_size
             )
-            df["score_pre_ttt"] = score_mutants(df[MUTANT_COL], seq, pre, alphabet)
+            df["score_pre_ttt"] = score_mutants(
+                df[MUTANT_COL], seq, pre, alphabet, offset_idx
+            )
             rec["t_score_pre"] = round(time.time() - t0, 2)
             rec["spearman_pre_ttt"] = float(
                 df["DMS_score"].corr(df["score_pre_ttt"], method="spearman")
@@ -244,7 +262,9 @@ def main():
             post = compute_token_probs(
                 model, alphabet, seq, device, args.score_batch_size
             )
-            df["score_ttt"] = score_mutants(df[MUTANT_COL], seq, post, alphabet)
+            df["score_ttt"] = score_mutants(
+                df[MUTANT_COL], seq, post, alphabet, offset_idx
+            )
             rec["t_score_post"] = round(time.time() - t2, 2)
             rec["spearman_ttt"] = float(
                 df["DMS_score"].corr(df["score_ttt"], method="spearman")

@@ -866,16 +866,51 @@ class TTTModule(torch.nn.Module, ABC):
                     state[name] = copy.deepcopy(module)
         return state
 
+    def _ttt_get_tied_parameters(self) -> T.List[T.Tuple[str, str]]:
+        """Record which parameters are the *same tensor*, as (alias, canonical) paths.
+
+        Needed because :meth:`_ttt_set_state` deep-copies each child module on its
+        own, which silently unties parameters shared across children.  ESM2 ties
+        ``lm_head.weight`` to ``embed_tokens.weight``; once untied, the output
+        projection stops being frozen along with the embedding, so the second and
+        every later ``ttt()`` call would train a different parameter set than the
+        first.
+        """
+        seen: T.Dict[int, str] = {}
+        tied: T.List[T.Tuple[str, str]] = []
+        for name, param in self.named_parameters(remove_duplicate=False):
+            if id(param) in seen:
+                tied.append((name, seen[id(param)]))
+            else:
+                seen[id(param)] = name
+        return tied
+
+    def _ttt_restore_tied_parameters(self, tied: T.List[T.Tuple[str, str]]) -> None:
+        """Re-point aliased parameters at their canonical tensor after a restore."""
+        for alias, canonical in tied:
+            *alias_path, alias_attr = alias.split(".")
+            *canon_path, canon_attr = canonical.split(".")
+            alias_module = (
+                self.get_submodule(".".join(alias_path)) if alias_path else self
+            )
+            canon_module = (
+                self.get_submodule(".".join(canon_path)) if canon_path else self
+            )
+            setattr(alias_module, alias_attr, getattr(canon_module, canon_attr))
+
     def _ttt_set_state(self, state: T.Any) -> None:
         """Restore model to a previously saved state.
 
         Args:
             state: Dictionary of module states from _ttt_get_state()
         """
+        tied = self._ttt_get_tied_parameters()
         for k, v in state.items():
             if hasattr(self, k):
                 delattr(self, k)
             self.add_module(k, copy.deepcopy(v))
+        # Deep-copying children independently breaks cross-child weight tying.
+        self._ttt_restore_tied_parameters(tied)
 
     def _ttt_cluster_sample_indices(
         self,

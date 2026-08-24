@@ -117,6 +117,19 @@ def assay_seed(seed, dms_id):
     return (seed * 1_000_003 + zlib.crc32(dms_id.encode())) % (2**31 - 1)
 
 
+def param_fingerprint(model):
+    """Sum of squares over every parameter -- an O(1)-cost reset guard.
+
+    `ttt_reset()` restores modules by deep copy, so this must come back
+    bit-identical.  Cheaper than re-scoring the whole assay, and strictly
+    stronger: it sees any weight change, not just ones that move Spearman.
+    """
+    with torch.no_grad():
+        return sum(
+            float((p.detach().double() ** 2).sum()) for p in model.parameters()
+        )
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", required=True, choices=sorted(MODELS))
@@ -133,6 +146,14 @@ def main():
     )
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--steps", type=int, default=None, help="override TTT steps")
+    p.add_argument(
+        "--pre_score",
+        default="every",
+        choices=["every", "first", "never"],
+        help="in ttt mode, how often to also score the un-customized model. "
+        "'every' is a per-assay sanity column; 'first' halves the scoring cost "
+        "for large models (the reset guard is the weight fingerprint, not this).",
+    )
     p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
 
@@ -175,8 +196,11 @@ def main():
         )
         model = ESM2TTT.ttt_from_pretrained(base_model, ttt_cfg=cfg)
         assert model._ttt_initial_state, "initial state not captured"
+        fingerprint_0 = param_fingerprint(model)
+        print(f"param fingerprint (pre-TTT): {fingerprint_0!r}", flush=True)
     else:
         model = base_model
+        fingerprint_0 = None
 
     for n, row in ref.iterrows():
         dms_id = row["DMS_id"]
@@ -189,23 +213,25 @@ def main():
         df = pd.read_csv(args.dms_dir / row["DMS_filename"])
         t0 = time.time()
 
-        pre = compute_token_probs(
-            model, alphabet, seq, device, args.score_batch_size
+        do_pre = args.mode == "baseline" or args.pre_score == "every" or (
+            args.pre_score == "first" and n == 0
         )
-        df["score_pre_ttt"] = score_mutants(df[MUTANT_COL], seq, pre, alphabet)
-        t_score_pre = time.time() - t0
-
         rec = dict(
             dms_id=dms_id,
             seq_len=len(seq),
             n_variants=int(len(df)),
             mode=args.mode,
             seed=args.seed if args.mode == "ttt" else None,
-            t_score_pre=round(t_score_pre, 2),
         )
-        rec["spearman_pre_ttt"] = float(
-            df["DMS_score"].corr(df["score_pre_ttt"], method="spearman")
-        )
+        if do_pre:
+            pre = compute_token_probs(
+                model, alphabet, seq, device, args.score_batch_size
+            )
+            df["score_pre_ttt"] = score_mutants(df[MUTANT_COL], seq, pre, alphabet)
+            rec["t_score_pre"] = round(time.time() - t0, 2)
+            rec["spearman_pre_ttt"] = float(
+                df["DMS_score"].corr(df["score_pre_ttt"], method="spearman")
+            )
 
         if args.mode == "ttt":
             t1 = time.time()
@@ -224,10 +250,20 @@ def main():
                 df["DMS_score"].corr(df["score_ttt"], method="spearman")
             )
             model.ttt_reset()
+            fingerprint = param_fingerprint(model)
+            rec["reset_ok"] = fingerprint == fingerprint_0
+            if not rec["reset_ok"]:
+                rec["fingerprint_delta"] = fingerprint - fingerprint_0
+                raise SystemExit(
+                    f"ttt_reset() did not restore weights on {dms_id}: "
+                    f"fingerprint {fingerprint!r} != {fingerprint_0!r}"
+                )
 
         rec["t_total"] = round(time.time() - t0, 2)
-        cols = [MUTANT_COL, "DMS_score", "score_pre_ttt"] + (
-            ["score_ttt"] if args.mode == "ttt" else []
+        cols = (
+            [MUTANT_COL, "DMS_score"]
+            + (["score_pre_ttt"] if do_pre else [])
+            + (["score_ttt"] if args.mode == "ttt" else [])
         )
         df[cols].to_csv(out_csv, index=False)
         with open(summary_path, "a") as f:

@@ -85,7 +85,11 @@ def main():
     for model, meta in PAPER.items():
         base_dir = args.scores_root / f"{model}__baseline"
         seed_dirs = sorted(
-            args.scores_root.glob(f"{model}__ttt__seed*"),
+            (
+                d
+                for d in args.scores_root.glob(f"{model}__ttt__seed*")
+                if d.is_dir() and re.search(r"seed\d+$", d.name)
+            ),
             key=lambda p: int(re.search(r"seed(\d+)$", p.name).group(1)),
         )
         if not base_dir.exists() and not seed_dirs:
@@ -124,11 +128,18 @@ def main():
             pa_ttt = per_assay_spearman(sd, "score_ttt")
             if pa_ttt.empty:
                 continue
-            a_pre = official_aggregate(pa_pre, ref)
             a_ttt = official_aggregate(pa_ttt, ref)
+            complete = base_agg is None or a_ttt["n_assays"] == base_agg["n_assays"]
+            if not complete:
+                emit(
+                    f"  +ProteinTTT seed{k}: PARTIAL, {a_ttt['n_assays']}/"
+                    f"{base_agg['n_assays']} assays -- not aggregated"
+                )
+                continue
+            a_pre = official_aggregate(pa_pre, ref)
             seed_aggs.append(a_ttt)
             emit(row(f"+ProteinTTT seed{k} (n={a_ttt['n_assays']})", a_ttt, meta["ttt"]))
-            if base_agg is not None and a_pre["n_assays"] == base_agg["n_assays"]:
+            if a_pre["n_assays"] == a_ttt["n_assays"]:
                 drift = abs(a_pre["avg_spearman"] - base_agg["avg_spearman"])
                 flag = "OK" if drift < 1e-9 else f"*** RESET LEAK {drift:.2e} ***"
                 emit(f"    reset check (score_pre_ttt vs baseline): {flag}")

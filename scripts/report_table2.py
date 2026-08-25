@@ -30,6 +30,16 @@ PAPER = {
                     OrganismalFitness=0.2403, Stability=0.4733,
                     Low=0.2445, Medium=0.3144, High=0.4598, std=0.00014),
     },
+    "ProSST-2048": {
+        "label": "ProSST (K=2048)",
+        "published_column": "ProSST (K=2048)",
+        "baseline": dict(avg=0.5068, Activity=0.4758, Binding=0.4448, Expression=0.5302,
+                         OrganismalFitness=0.4306, Stability=0.6526,
+                         Low=0.4731, Medium=0.5107, High=0.5749),
+        "ttt": dict(avg=0.5087, Activity=0.4822, Binding=0.4470, Expression=0.5321,
+                    OrganismalFitness=0.4315, Stability=0.6507,
+                    Low=0.4809, Medium=0.5104, High=0.5750, std=0.00004),
+    },
     "esm2_t33_650M_UR50D": {
         "label": "ESM2 (650M)",
         "published_column": "ESM2 (650M)",

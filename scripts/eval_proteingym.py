@@ -169,6 +169,13 @@ def main():
         "'every' is a per-assay sanity column; 'first' halves the scoring cost "
         "for large models (the reset guard is the weight fingerprint, not this).",
     )
+    p.add_argument(
+        "--no_tie_restore",
+        action="store_true",
+        help="reproduce the shipped behaviour instead: let ttt_reset() untie "
+        "lm_head.weight from embed_tokens.weight, so every assay after the first "
+        "additionally trains the output projection. Measures what the tying fix costs.",
+    )
     p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
 
@@ -186,8 +193,10 @@ def main():
     if args.limit:
         ref = ref.iloc[: args.limit].reset_index(drop=True)
 
-    tag = f"{args.model}__{args.mode}" + (
-        f"__seed{args.seed}" if args.mode == "ttt" else ""
+    tag = (
+        f"{args.model}__{args.mode}"
+        + (f"__seed{args.seed}" if args.mode == "ttt" else "")
+        + ("__untied" if args.no_tie_restore else "")
     )
     out_dir = args.out_dir / tag
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -211,6 +220,13 @@ def main():
         )
         model = ESM2TTT.ttt_from_pretrained(base_model, ttt_cfg=cfg)
         assert model._ttt_initial_state, "initial state not captured"
+        if args.no_tie_restore:
+            model._ttt_restore_tied_parameters = lambda tied: None
+            print(
+                "WARNING: tie restoration disabled -- reproducing the pre-fix "
+                "behaviour where assays 2..N also train lm_head.weight",
+                flush=True,
+            )
         fingerprint_0 = param_fingerprint(model)
         print(f"param fingerprint (pre-TTT): {fingerprint_0!r}", flush=True)
     else:
@@ -272,7 +288,7 @@ def main():
             model.ttt_reset()
             fingerprint = param_fingerprint(model)
             rec["reset_ok"] = fingerprint == fingerprint_0
-            if not rec["reset_ok"]:
+            if not rec["reset_ok"] and not args.no_tie_restore:
                 rec["fingerprint_delta"] = fingerprint - fingerprint_0
                 raise SystemExit(
                     f"ttt_reset() did not restore weights on {dms_id}: "

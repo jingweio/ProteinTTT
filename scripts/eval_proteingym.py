@@ -296,6 +296,8 @@ def main():
                 )
 
         rec["t_total"] = round(time.time() - t0, 2)
+        rec["peak_mem_gb"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
+        torch.cuda.reset_peak_memory_stats()
         cols = (
             [MUTANT_COL, "DMS_score"]
             + (["score_pre_ttt"] if do_pre else [])

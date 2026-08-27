@@ -27,6 +27,16 @@
 | **N5** | §12「partner-blind 恒等于 0.000」（已改为"≈0"） | ⚠️ 仍需再改：partner-blind 打分器对两个 partner 给出**同一个常数向量**，相关系数是**未定义**而非 0 ⇒「唯一 baseline 做不到的读数」目前是**同义反复、不可 falsify**。必须先规定约定 |
 | **N6** | 未使用 | ⭐ **KRAS 重复 assay 给出一把免费的尺子**：同一批 label、不同结构+partner ⇒ ProteinMPNN 的 per-assay ρ 差 **0.0948**（0.4040 vs 0.3092），14 个模型 mean \|Δ\| = **0.0613**；序列模型只有 0.004–0.010，**结构模型 0.07–0.28**。ProteinMPNN 那 0.0948 是 §2(B) 的 MDE（0.021）的 **4.5 倍** |
 
+| **N7** | §11「BindingGYM 零 MSA ⇒ S2 的主增益路径开箱不可用」 | ❌ **错了。BindingGYM 官方提供 MSA**，在 `input/msas/`（22 个 `.a2m`，633 MB，来自 Zenodo record 12514160 的 `input.zip`）。我早前那份 rsync 来源是 session scratchpad，**它本身缺 `msas/`**，所以我的 find 与后续论证都建立在一个不完整的副本上。已补齐：`~/share/BindingGYM/input/msas` 与 `/data/guoj0f/share/BindingGYM/input/msas` 两侧都有。⇒ **S2（backbone-conditioned homolog denoising）的 q 有现成来源，不需要自建 paired MSA** —— 这是本 plan 唯一被**放松**的约束。但见下方 MSA 的三个口径限制 |
+
+**MSA 的实际口径（已核，25/25 assay）**：
+- **query = 被突变链的拼接**，不是完整复合物（raw query 长度 25/25 精确等于被突变链总长）
+- **文件按结构名索引**（22 个文件覆盖 25 个 assay）⇒ 共享结构的 assay 共享 MSA
+- **对齐核心（大写列）常远短于 query**：BH3_Mcl-1 仅 **13/23**、hYAP65 34/46、PSD95 87/115；
+  SARS2-RBD 是唯一全覆盖（194/194）。多链突变时更糟：4D5 的 query 434（A 214 + B 220）
+  而核心只有 **220** ⇒ **实际只对齐了其中一条链**
+- 深度跨度极大：**521**（GB1）到 **756,017**（PSD95），median 14,724
+
 **新增的一条正面证据**（C.2 实测，BH3 peptide 在 3KZ0/1PQ1 上 518/518 对齐）：
 **匹配骨架 0.6813 vs 错配 partner 0.3713（Δ = +0.310）**；而**错骨架（0.3713）比完全没有 partner
 （0.5975）更差 0.226** ⇒ **固定 WT 骨架是双向赌注、不是免费先验**，而 BindingGYM **15/22 个结构带 `_hm`**。

@@ -10,6 +10,30 @@
 
 ---
 
+## 0a. v3 修订（2026-08-27）—— 用户指定的删改 + 一轮新分析的更正
+
+按用户要求：**删除**「ProteinGym 复现的三条新证据」一节（原 v1 §3 / v2 §4）与「ProteinMPNN 超越
+几何 baseline」一节（原 v1 §6）。两节的内容分别被下面 §A/§C 的更强证据取代。
+
+一轮针对 (4)(6)(10) 的分析（3 路独立分析 + 对抗复核）**推翻了 v2 里若干条我自己的表述**，
+逐条更正见 `refs/analysis_q4_q6_q10_20260827.md`。对本 plan 最要紧的六条：
+
+| # | v2 的说法 | 更正 |
+|---|---|---|
+| **N1** | 未使用 | ⭐ **ProteinTTT 自己 Table 2 的 Binding 列增益均值只有 +0.0012、Stability 为负**（`ttt.txt:435-450`）。**这一条足以支撑负面预期，且不需要任何机制论证。** 计划若要往下走，必须先回答「凭什么突破 +0.0012」 |
+| **N2** | §4.1「0.3970 落在 TTT 给 +0.019 那一档」 | ❌ **算错了**。复算 ESM2-150M = 0.3868、650M = 0.4138 ⇒ 0.3970 落在 **150M 与 650M 之间**，最近的上一档是 650M，其实测增益 **+0.0010**。**按同一映射逻辑结论应反过来** |
+| **N3** | §3.1「单调下降、没有操作窗口」 | ❌ 正确表述是「**大 lr 下急剧退化，而真正的工作区间从未被检验**」。lr=1e-3 的 Δ=−0.0119 落在 1σ 内；masked-denoise 臂只测了 2 个 lr、**都 ≥1e-2**；而 ProteinTTT fitness 用的是 **AdamW 4e-5–4e-3** |
+| **N4** | 「TTT 主要改善 low MSA depth」（引 paper） | ❌ **与 paper 自己的 Table A4 矛盾**：ESM2-35M 分层增益 Low **+0.0051** < Medium **+0.0437**。且 Table A4 的 Low/High baseline 与 leaderboard 不一致 —— **该表不可用于机制推理** |
+| **N5** | §12「partner-blind 恒等于 0.000」（已改为"≈0"） | ⚠️ 仍需再改：partner-blind 打分器对两个 partner 给出**同一个常数向量**，相关系数是**未定义**而非 0 ⇒「唯一 baseline 做不到的读数」目前是**同义反复、不可 falsify**。必须先规定约定 |
+| **N6** | 未使用 | ⭐ **KRAS 重复 assay 给出一把免费的尺子**：同一批 label、不同结构+partner ⇒ ProteinMPNN 的 per-assay ρ 差 **0.0948**（0.4040 vs 0.3092），14 个模型 mean \|Δ\| = **0.0613**；序列模型只有 0.004–0.010，**结构模型 0.07–0.28**。ProteinMPNN 那 0.0948 是 §2(B) 的 MDE（0.021）的 **4.5 倍** |
+
+**新增的一条正面证据**（C.2 实测，BH3 peptide 在 3KZ0/1PQ1 上 518/518 对齐）：
+**匹配骨架 0.6813 vs 错配 partner 0.3713（Δ = +0.310）**；而**错骨架（0.3713）比完全没有 partner
+（0.5975）更差 0.226** ⇒ **固定 WT 骨架是双向赌注、不是免费先验**，而 BindingGYM **15/22 个结构带 `_hm`**。
+
+⚠️ 该组实测跑在 **StaB-ddG 的 soluble 权重**上（每臂 n=1 seed、只有一对 peptide），作单点证据保留、
+不可当定量结论。
+
 ## 0. v1 → v2 的实质性改动（先看这个）
 
 | # | v1 的说法 | 实际情况 | 后果 |
@@ -145,41 +169,6 @@ likelihood 一起塌向下界、丢失细粒度区分度。**这个机制预测"
 
 ---
 
-## 4. ProteinGym 复现给出的新证据
-
-### 4.1 TTT 增益随基座变强而衰减，而 ProteinMPNN 是 BindingGYM 榜首
-
-| 模型 | ProteinGym rank | TTT 增益（我们实测） |
-|---|---|---|
-| ESM2 (35M) | 84 / 97 | +0.0189（5 seeds，±0.00006） |
-| ESM2 (650M) | 45 / 97 | +0.0010 |
-| ProSST (K=2048) | **3 / 97** | +0.0018 |
-
-ProteinMPNN 在 BindingGYM 上是 **rank 1**。
-
-### 4.2 单体 fitness 上，"用同源序列"贡献了 11 倍于"test-time 适配"的增益
-
-| | Avg. Spearman | 增益 |
-|---|---|---|
-| ESM2 (650M) | 0.4139 | — |
-| + 单序列 ProteinTTT | 0.4153 | +0.0014 |
-| **+ ProteinTTT_MSA (Eq. 5)** | **0.4299** | **+0.0160** |
-
-⇒ 约 **92%** 的增益来自 MSA 而非 TTT 本身。**这是 §11（S2）的最强独立支持。**
-且横向调研（35 个 ProteinGym baseline，逐个读代码）确认：Eq. 5 那类"MSA 行当训练样本"的机制，
-其**最优解是家族条件分布 p(x_i | x_{−i}) 而非列边缘** ⇒ **耦合信息存活**，
-这正是"最优解不是 δ_WT"所需的性质。
-
-### 4.3 实际目标函数比想象的更"抄 WT"（**但只对 ESM2 类模型成立**）
-
-fitness 用的 `unnormalized_cross_entropy` 完全忽略 mask，在全部 token 上算 loss：
-被 mask 位置 loss 1.8013，未 mask 的残基位置仅 0.2864 ⇒ 约 **85% 的梯度来自抄写。**
-
-⚠️ 这条**不能直接移植到 ProteinMPNN** —— 它是自回归 inverse-folding，不是 MLM。
-移植需要单独验证，因此**这是一条待验证的类比，不是第三条独立证据**。
-
----
-
 ## 5. BindingGYM 的 variant 结构与 ProteinGym 根本不同（全部数字已复核）
 
 | | ProteinGym | **BindingGYM** |
@@ -225,10 +214,6 @@ we input **full protein complex structures** into our structure-based methods."*
 - 对照组：**ESM2 0.2851 vs ESM2_all_seq 0.2852** —— 序列模型拼上 partner 序列**增益为零**（未进 paper）
 - 全 benchmark **只有 5/13 个 baseline 真正吃到 partner**（ProteinMPNN / PiFold / ByProt / ESM-IF1 / PPIformer）；
   **SaProt 走的是 ESM 那条 `--focus 1` 路径，只看被突变的链**
-
-**零参数几何 baseline**：`rho_burial_on_iface` 0.2816、`rho_dmin` 0.2598、`rho_burial_complex` 0.2444
-—— 打平的是 **ESM2 (0.2851)**，**不是 ProteinMPNN (0.3970)**。MPNN 高出约 **0.14** ⇒ baseline 有真实信号、
-因此更难被超过。
 
 ---
 

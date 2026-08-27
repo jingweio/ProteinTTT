@@ -1,0 +1,11 @@
+ProteinMPNN_zero_shot_metric.csv  <- BindingGYM/results/  官方发布的 zero-shot 逐 assay 6 指标（25 行）
+                                     论文 Table 2 的 0.40/0.69/0.15/0.72/0.22 与它逐位吻合
+bindinggym_metrics.py             <- H3-DDG/.claude/worktrees/reproduce/
+                                     逐字移植官方 calc_metric.ipynb::calc_zero_shot_metric(top_test=False)
+prior_run_M1_per_assay.csv        <- H3-DDG/.../reproduce-finetune-proteinMPNN-over-BindingGYM/results/
+                                     上一次复现（Ibex, a100, 1:09:42）。**未传 --num_seq_per_target ⇒ M=1**
+                                     均值 0.3840 vs 官方 0.3970，Δ=-0.0129，17/25 偏负
+BindingGYM.csv                    <- assay 索引表（25 行）
+大件不在此处：
+  assay CSV / 结构 / checkpoint  ->  local  /home/guoj0f/share/BindingGYM/{input,training/cache}
+                                     remote /data/guoj0f/share/BindingGYM/{input,training/cache,baselines}

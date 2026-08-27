@@ -22,7 +22,7 @@ def one_run(score_dir, pred_col):
         if pred_col not in df.columns:
             continue
         m = bindinggym_metrics_one_assay(df, pred_col=pred_col, label_col="DMS_score")
-        rows.append(dict(DMS_id=os.path.basename(f)[:-4], n=len(df), **m))
+        rows.append(dict(DMS_id=os.path.basename(f)[:-4], **m))
     return pd.DataFrame(rows)
 
 

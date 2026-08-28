@@ -11,11 +11,11 @@
 # Binding/Expression/OrganismalFitness match to ~0.001. The tying fix is the only known
 # methodological difference between our run and the shipped code.
 set -uo pipefail
-L=/data/guoj0f/proteingym-ttt-repro/logs
+L=/data/guoj0f/proteinTTT-repro/logs
 D=/home/guoj0f/repos/ProteinTTT/proteinTTT-proteinGYM-reproduce
 while pgrep -f "[e]val_proteingym.py" >/dev/null; do sleep 60; done
 echo "[ablation] $(date '+%F %T') starting 35M seed 0, tie restoration DISABLED"
-bash "$D/workstation-records/proteingym-ttt-repro/sh/s1_ttt_esm2_20260824-231500.sh" \
+bash "$D/workstation-records/proteinTTT-repro/sh/s1_ttt_esm2_20260824-231500.sh" \
   esm2_t12_35M_UR50D "0" --pre_score every --no_tie_restore \
   > $L/ablation_untied_35M_seed0.out 2> $L/ablation_untied_35M_seed0.err
 echo "[ablation] $(date '+%F %T') ABLATION_DONE"

@@ -147,7 +147,7 @@
 
 ### M3. §2 的「证据强度边界」写窄了 —— 真正的问题不是「只有 1 个 assay」，而是「这个 assay 在极端一侧」
 - BH3_Mcl-1 的 published ProteinMPNN ρ=0.66251 在 25 个里**排第 2**；n=518 **并列最小**（0.14% 的 variant）；其所在 ρ≥0.62 分层只占 4/25 assay、7.12% variant；且它自己天花板极低（M=inf proxy 0.7017 只比 M=20 高 0.0098，有界指标在接近上界处任何扰动都更可能向下）。⇒ 这轮实测给出的是**损伤上界**，对 benchmark mean 的方向性没有约束。
-- 需要**降一档**的一句：「高 baseline 更容易被 TTT 打坏」目前只有两个极值点（ProteinGym 复现里最差 −0.1926 @baseline 0.675、最好 +0.5137 @0.140），逐 assay 的 baseline–Δ 相关性**没有实测**（`workstation-records/proteingym-ttt-repro/results/` 是空目录），且记录里对最差三个的归因是「37–44 残基的短 stability assay」而不是「高 baseline」。
+- 需要**降一档**的一句：「高 baseline 更容易被 TTT 打坏」目前只有两个极值点（ProteinGym 复现里最差 −0.1926 @baseline 0.675、最好 +0.5137 @0.140），逐 assay 的 baseline–Δ 相关性**没有实测**（`workstation-records/proteinTTT-repro/results/` 是空目录），且记录里对最差三个的归因是「37–44 残基的短 stability assay」而不是「高 baseline」。
 - 编辑：按上述改写 §2 结尾的边界声明，并加一句「若要用它支撑外推，需先从 ProteinGym 复现导出 per-assay Δ 并实测该相关性」。§11「我给的把握是高的」改为「对高 baseline assay 把握高，对 benchmark mean 未定」。
 
 ### M4. §1 完全没提 benchmark 自己的误差棒（3/6 命中）

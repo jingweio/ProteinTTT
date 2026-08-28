@@ -17,8 +17,8 @@ python -c "import torch; n=torch.cuda.get_device_name(0); print('GPU:', n); asse
 export PYTHONPATH="$REPO"
 export HF_HOME=/data/guoj0f/share/hf_cache
 export TORCH_HOME=/data/guoj0f/share/torch_hub
-OUT=/data/guoj0f/proteingym-ttt-repro/scores
-REF="$REPO/workstation-records/proteingym-ttt-repro/refs/DMS_substitutions.csv"
+OUT=/data/guoj0f/proteinTTT-repro/scores
+REF="$REPO/workstation-records/proteinTTT-repro/refs/DMS_substitutions.csv"
 COMMON=(--dms_reference "$REF"
         --dms_dir /data/guoj0f/share/ProteinGym/DMS_ProteinGym_substitutions
         --prosst_dir /data/guoj0f/share/ProSST

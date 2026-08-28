@@ -1,5 +1,16 @@
 # BindingGYM KRAS 重复数据 — 溯源审计
 
+> ## ⚠️ 本文档的归因结论已被推翻（2026-08-28 晚）
+> 拿到源头数据后确认：**错误不在 BindingGYM，而在 Nature 论文的 Supplementary Table 4 本身** ——
+> 其 `BindingPCA DARPin K27` 与 `BindingPCA DARPin K55` 两块数据被 `BindingPCA SOS1` 整块覆写。
+> BindingGYM 是**忠实传播**（读取无误 98.7–99.3%）。
+> **定案：`KRAS_SOS1_8BE4` 是对的，`KRAS_DARPinK27_5O2S` 是错的**（本文档 §3.5 的结构启发式指向相反，是错的）。
+> 完整证据链（bioRxiv v1 / MAVEdb / 原始 DiMSum 三个独立来源）见：
+> **`/home/guoj0f/repos/Sources/datasets/BindingGYM_KRAS_provenance_audit_20260828.md`**
+>
+> 本文档保留作为**发现过程与 benchmark 内影响评估**的记录；§1/§2/§3.6/§4 的实测数字仍然成立，
+> **§3.3（归因到 curation 第 3 步）与 §3.5（未定案）已过时**。
+
 > created 2026-08-28 14:34 · status: DONE（调查完成，一处归属未定案）
 > **只读调查**：全程未修改任何代码或数据集，仅新增本文档。
 > 关联：[`zeroshot_proteinmpnn_20260827-154500.md`](zeroshot_proteinmpnn_20260827-154500.md)（本 project 的复现记录）

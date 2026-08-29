@@ -1,0 +1,11 @@
+system,n_mutant_pdb,bindinggym_relation
+4fqi,65536,BindingGYM 的 CR9114_FluAH1_4FQI / FluAH3_4FQY —— 被砍掉的流感 assay
+aayl49_ML,8953,与 BindingGYM 无关
+aayl51,4320,与 BindingGYM 无关
+aayl49,4312,与 BindingGYM 无关
+2fjg,2223,与 BindingGYM 无关
+3gbn,1917,BindingGYM 的 CR6261_FluAH1_3GBN —— 被砍掉的 3 个流感 assay 之一
+1mlc,1229,与 BindingGYM 无关
+1n8z,419,"(AbBiBench 自有 419 行数据集, 非 BindingGYM 的 4D5_HER2 2080)"
+1mhp,37,与 BindingGYM 无关
+TOTAL,88946,

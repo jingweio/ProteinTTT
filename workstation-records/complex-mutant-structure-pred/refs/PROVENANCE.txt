@@ -1,0 +1,34 @@
+本目录 refs/ 的来源（2026-08-29）
+
+bindinggym_structure_coverage.csv
+  由 sh/audit_bindinggym_structure_coverage.py 的同一逻辑生成。
+  源数据: /home/guoj0f/share/BindingGYM/input/  (Zenodo record 12514160, input.zip)
+    - BindingGYM.csv                   25 行索引
+    - Binding_substitutions_DMS/*.csv  28 个（benchmark 只用 25）
+    - structures/*.pdb                 22 个
+  每行 = 一个 (assay, chain)，共 53 行。is_mutated_chain=True 的行才参与覆盖率统计。
+  n_X_gap = wildtype_sequence 里的 'X' 数 = 该链在结构中无坐标的残基数（已验证等价）。
+
+abbibench_mutant_structure_listing.txt.gz
+  AbBiBench mutant-structure 包的完整 tar 清单，88,956 条。
+  取法（不落盘 8.2 GB）：
+    curl -sL "https://zenodo.org/records/16557372/files/mutant_structure.tar.gz?download=1" \
+      | gzip -dc | tar -tvf - > abb_listing.txt
+  抓取时间 2026-08-29 00:00 UTC+3；Zenodo 记录 published 2025-07-29，CC-BY-4.0。
+
+abbibench_mutant_structure_inventory.csv
+  上面那份清单按体系目录聚合的计数（9 个体系，88,946 个 .pdb）。
+  关键结论：4d5_her2 / 4zfg / 4zff 三个目录【不存在】，即 AbBiBench 不覆盖
+  BindingGYM 的任何 benchmark assay。详见主记录 §8。
+
+pseudolabel_survey_lenses_20260829.json.gz                       （2026-08-29 追加）
+  structure_pseudolabel_methods_survey_20260829-231404.md 的原始产物。
+  Claude Code dynamic workflow wf_79193fef-118（11 agents，0 error）的完整返回值：
+    lenses[] = 5 个 lens，每个含
+      items[]    工具/方法条目（name / category / year / whatItDoes / canDoComplexes /
+                 usableForMutants / speed / license / source / confidence）
+      verdicts[] 对抗核查判决（CONFIRMED / CORRECTED / REFUTED / UNVERIFIABLE + 改正值 + 核查来源）
+      missing[]  核查 agent 补报的 finder 漏项
+  合计 113 items（全部带 verdict）+ 58 条 missing。记录 md 的正文即由此合成，
+  凡与本文件冲突处，以本文件的 verdicts 为准。
+  解压：gzip -dc pseudolabel_survey_lenses_20260829.json.gz | python3 -m json.tool | less

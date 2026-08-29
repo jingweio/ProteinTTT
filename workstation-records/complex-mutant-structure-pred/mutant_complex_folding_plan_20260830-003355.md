@@ -1,6 +1,6 @@
 # complex-mutant-structure-pred — ESMFold2-Fast mutant complex folding
 
-（created 2026-08-30 00:33; status: **PLANNED** —— 计划待用户拍板，尚未启动生产运行）
+（created 2026-08-30 00:33; status: **PILOT DONE / PLANNED** —— pilot 已跑完并推翻了原成本估算；生产运行待用户拍板）
 
 ## 1. Goal / hypothesis
 
@@ -137,9 +137,72 @@ mutant deviation 中位数 < 噪声底，该 assay 对目标 (a) 直接判负（
 - ⛔ **SOP §10.4 的"两个数量级"是错的**：真实值约 **14×**（高估约 8×）。原因：diffusion samples 共享 trunk；
   loops 只放大 trunk 项、steps 只放大 diffusion 项，三者不相乘。建议回填修订 SOP。
 
-## 7. Results
+## 7. Pilot 实测结果（2026-08-30 01:xx，workstation A100 80GB）
 
-（待填）
+### 7.1 复合物路径首次跑通（SOP §10 此前标注"一条都没跑过"）
+
+L=56 (`hYAP65` WT, chains A:46 + P:10)，config B (10 loops / 68 steps / 1 sample)：
+
+```
+FOLD OK  6.42 s (冷) / 2.31 s (热)   峰值显存 12.77 GB
+ptm=0.489  iptm=0.400              ← ipTM 对复合物可用
+mmCIF 36,533 B   链标识 ['A','P'] == 输入 ['A','P']   ← 链 ID 保真
+model load 29.3 s | builder(含 ccd) 6.8 s   ← 一次性开销
+```
+
+**`ccd.pkl` 是硬依赖** —— `ESMFold2InputBuilder.__init__` 无条件调 `load_ccd()`，protein-only 也躲不掉。
+已下到 workstation `$HF_HOME/ccd.pkl`，**417,306,584 B，与 SOP 记录的 Ibex 副本字节数完全一致**。
+→ 建议回填 SOP §2.2（"local ❌ 没有"）与 §1.3（把"只有用别的变体才要单独拿"改成"任何变体都必需"）。
+
+### 7.2 ⛔ TF32 假说被实测否证
+
+workflow 的 pilot Stage-0 把 TF32 列为"最高优先级、2–8× 的开关"。实测：
+
+| assay | L | TF32 off | TF32 on | 加速 | 峰值显存 |
+|---|--:|--:|--:|--:|--:|
+| hYAP65_1JMQ | 56 | 2.80 s | 2.31 s | 1.21× | 12.77 GB |
+| GB1_IgG-Fc_1FCC | 262 | 11.00 s | 10.50 s | 1.05× | 13.71 GB |
+| 5A12_VEGF_4ZFF | 528 | 55.71 s | 55.73 s | **1.00×** | 16.72 GB |
+| SARS2-RBD_ACE2_6M0J | 791 | 227.46 s | 226.45 s | **1.00×** | 21.70 GB |
+| KRAS_PICK3CG_1HE8 | 1107 | — | — | **OOM** | 见 §7.4 |
+
+**TF32 在成本占主导的长度段上完全没有收益。** 原假说作废。
+
+### 7.3 🔴 实测比估算慢 2.3–9.8×，且标度指数远高于论文
+
+| L | 实测 (TF32 on) | 估算 | 实测/估算 | 局部标度指数 |
+|--:|--:|--:|--:|--:|
+| 56 | 2.31 s | 1.0 s | 2.3× | — |
+| 262 | 10.50 s | 3.1 s | 3.4× | 0.98 (56→262) |
+| 528 | 55.73 s | 10.0 s | 5.6× | **2.38** (262→528) |
+| 791 | 226.45 s | 23.1 s | **9.8×** | **3.47** (528→791) |
+
+论文 Fig 2E 拟合出的指数是 **1.81**；我们实测在大 L 端是 **3.47**（接近 O(L³)，即 triangle 算子主导）。
+差距来源是论文用了四层我们没有的加速：ESMC **fp8**（A100 无 TransformerEngine）、trunk **bf16**（我们 fp32）、
+**torch.compile + padding bucket**、**fused Triton / cuEquivariance kernel**。启动日志确认三条 fallback：
+`transformer_engine` / `xformers` / `flash-attn` 全部缺失，走纯 PyTorch。
+
+**成本修正**（config B，每 assay 抽样 1,500）：
+
+| | 原估算 | **实测修正** |
+|---|--:|--:|
+| 24 个有效 assay × 1,500 | 98 A100-h（4 天） | **1,013 A100-h（单卡 42 天）** |
+| 全量 376,446 | 839 A100-h | **7,728 A100-h** |
+
+### 7.4 ⚠️ 共享 GPU 争用导致 L=1107 OOM（不是我们的 footprint 问题）
+
+`torch.OutOfMemoryError` 时的 GPU 快照：本进程 29.93 GiB + **他人 4 个进程共 48.9 GiB**
+（其中 `Process 129777` 占 33.51 GiB，是 benchmark 途中新出现的）= 78.8 / 79.15 GiB。
+我们自己在 L=791 的峰值只有 21.70 GB，L=1107 外推约 35 GB —— **单独跑放得下，与他人共存放不下**。
+按 skill §0 未动他人进程。生产运行需要：(a) 起跑前重做 §1 预检；(b) 长 L 的 assay 用 `set_chunk_size(32)` 降显存；
+(c) 把 L>900 的 assay 排到最后，避开争用高峰。
+
+### 7.5 下一步：先花 ~1 GPU-h 尝试补回这 10×
+
+在投入三位数 GPU-hour 之前，逐项测这四个旋钮（每项一次 L=528 与 L=791 计时）：
+`pip install xformers` → `set_kernel_backend("fused")` → trunk bf16（SOP §4.1 说有 dtype bug，需复核）
+→ `torch.compile` → 换 cu126 torch（CUDA minor version compatibility，绕开 2.5.1 这个 8 个 minor 版本的降级）。
+**若能拿回 3–5×，1,013 h 会降到 200–340 h，项目性质完全不同。**
 
 ## 关联
 

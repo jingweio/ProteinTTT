@@ -48,8 +48,30 @@ d2 = (t.MPNN_complex - t["ProteinMPNN"]).dropna()
 print(f"  vs official   : mean {d2.mean():+.4f}  positive {int((d2>0).sum())}/{len(d2)}  "
       f"Wilcoxon p={wilcoxon(d2).pvalue:.4f}")
 
+# ---- decomposition: how much comes from the structure, how much from the partner
+struct = (t.MPNN_monomer - t["ProteinMPNN"]).dropna()
+print("\n=== decomposition (official -> monomer -> complex) ===")
+print(f"  structure source (official -> monomer): mean {struct.mean():+.4f}  "
+      f"positive {int((struct>0).sum())}/{len(struct)}  Wilcoxon p={wilcoxon(struct).pvalue:.4f}")
+print(f"  partner          (monomer  -> complex): mean {d.mean():+.4f}  "
+      f"positive {int((d>0).sum())}/{len(d)}  Wilcoxon p={wilcoxon(d).pvalue:.4f}")
+
+# robustness of the partner effect
+WEAK = ["DLG4_RAT_McLaughlin_2012", "YAP1_HUMAN_Araya_2012"]   # partner is a 5aa / 10aa peptide
+SMALL = ["B2L11_HUMAN_Dutta_2010_binding-Mcl-1"]               # only 170 variants
+print("\n=== partner effect, robustness ===")
+for lab, keep in [("all 9", list(t.index)),
+                  ("drop B2L11 (n=170)", [i for i in t.index if i not in SMALL]),
+                  ("drop 5-10aa peptide partners", [i for i in t.index if i not in WEAK]),
+                  ("drop both", [i for i in t.index if i not in WEAK + SMALL])]:
+    dd = (t.loc[keep, "MPNN_complex"] - t.loc[keep, "MPNN_monomer"]).dropna()
+    pv = wilcoxon(dd).pvalue if len(dd) > 2 else float("nan")
+    print(f"  {lab:32s} n={len(dd)}  mean {dd.mean():+.4f}  "
+          f"positive {int((dd>0).sum())}/{len(dd)}  Wilcoxon p={pv:.4f}")
+
 # ranking of our variants among all official models on exactly these assays
-num = off.select_dtypes("number")
+# "Number of Mutants" is assay metadata, not a model -- it must not enter the leaderboard
+num = off.select_dtypes("number").drop(columns=["Number of Mutants"], errors="ignore")
 num = num.loc[:, num.notna().all()]
 board = num.mean().to_frame("mean_rho")
 for nm in ["MPNN_monomer", "MPNN_complex"]:

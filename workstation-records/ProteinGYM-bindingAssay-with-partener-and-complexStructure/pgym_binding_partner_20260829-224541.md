@@ -1,6 +1,6 @@
 # ProteinGYM-bindingAssay-with-partener-and-complexStructure — experiment record
 
-created 2026-08-29 22:45 · **status: RUNNING**
+created 2026-08-29 22:45 · **status: DONE**（2026-08-29 23:41 完成）
 
 ## 1. Goal
 
@@ -60,8 +60,84 @@ builder 的输入根全部走环境变量且**只读**，输出只写 `--out`。
 
 ## 4. Change log
 
-- 20260829-224541: 本地 smoke test 通过（B2L11 / DLG4，坐标校验 OK），提交并同步，启动。
+- 22:45 本地 smoke test 通过（B2L11 / DLG4，坐标校验 OK），提交 `f65f464`、同步（ALIGNED 84 files）、启动 **PID 4011059**。
+- 23:41 `ALL_DONE`，elapsed **56 分钟**，stderr 全空，9×2 = 18 份 score 全部通过坐标校验。
+- 23:45 聚合脚本修一处 bug：官方表的 `Number of Mutants` 是 assay 元数据不是模型，之前被算进 leaderboard 排到了第 1。已剔除后重算。
 
 ## 5. Results
 
-（待填）
+### 5.1 逐 assay（Spearman，target 链限定分数）
+
+| assay | n | official | monomer | complex | **partner 效应** | vs official |
+|---|---|---|---|---|---|---|
+| `B2L11_HUMAN_Dutta_2010_binding-Mcl-1` | 170 | −0.005 | 0.254 | **0.726** | **+0.472** | +0.731 |
+| `DLG4_RAT_McLaughlin_2012` | 1,576 | 0.135 | 0.191 | 0.265 | +0.074 | +0.130 |
+| `SPG1_STRSG_Olson_2014` | 536,962 | 0.147 | 0.331 | **0.394** | +0.062 | +0.247 |
+| `SPG1_STRSG_Wu_2016` | 149,360 | 0.089 | 0.185 | 0.229 | +0.045 | +0.140 |
+| `CD19_HUMAN_Klesmith_2019_FMC_singles` | 2,995 | 0.174 | 0.136 | 0.178 | +0.042 | +0.004 |
+| `SPIKE_SARS2_Starr_2020_binding` | 3,669 | 0.160 | 0.390 | **0.415** | +0.026 | +0.255 |
+| `YAP1_HUMAN_Araya_2012` | 10,075 | 0.197 | 0.147 | 0.171 | +0.024 | −0.026 |
+| `Q53Z42_HUMAN_McShan_2019_binding-TAPBPR` | 3,344 | 0.192 | 0.260 | 0.258 | −0.002 | +0.066 |
+| `ACE2_HUMAN_Chan_2020` | 2,185 | 0.106 | 0.081 | 0.077 | −0.004 | −0.029 |
+| **均值** | | **0.1328** | **0.2193** | **0.3013** | **+0.0819** | **+0.1685** |
+
+### 5.2 增益从哪来 —— 结构和 partner 各占一半
+
+```
+official 0.1328 ──(结构：AF2全长 → 晶体结合域)──▶ monomer 0.2193 ──(加 partner)──▶ complex 0.3013
+                        +0.0866  6/9  p=0.055                        +0.0819  7/9  p=0.020
+```
+
+**两个效应量级几乎相同。** 换句话说，把 ProteinMPNN 在 binding 上的分数从 0.133 抬到 0.301，
+**一半功劳不是 partner，而是换了结构** —— AF2 预测的全长蛋白换成实验晶体里那段紧凑的结合域。
+
+### 5.3 partner 效应的稳健性（这是本实验最需要谨慎的一点）
+
+| 子集 | n | 均值 | 正号 | Wilcoxon p |
+|---|---|---|---|---|
+| 全部 9 个 | 9 | **+0.0819** | 7/9 | **0.020** |
+| 去掉 `B2L11`（n=170，方差大） | 8 | +0.0332 | 6/8 | 0.039 |
+| 去掉 5–10aa 肽 partner（`DLG4`/`YAP1`） | 7 | +0.0913 | 5/7 | 0.078 |
+| **两者都去掉** | 6 | **+0.0280** | 4/6 | **0.156** |
+
+**"全部 9 个"那个 +0.082 几乎完全由 `B2L11` 一个 assay 撑起来**（它一个就 +0.472，而且只有 170 个变体）。
+去掉它之后效应降到 **+0.033**；再去掉两个弱 partner 后 **+0.028、p=0.156，不显著**。
+
+诚实的结论：**方向是一致的（7/9 为正），但量级小，且在 n=9 的规模下经不起去掉单个离群点的检验。**
+
+### 5.4 在这 9 个 assay 上的 leaderboard 排名（97 个官方模型 + 我们 2 个）
+
+| | mean ρ | rank |
+|---|---|---|
+| ProSST (K=4096) | 0.4862 | 1 |
+| VenusREM | 0.4444 | 4 |
+| ESM-IF1 | 0.3598 | 14 |
+| **[ours] MPNN_complex** | **0.3013** | **40** |
+| **[ours] MPNN_monomer** | **0.2193** | **73** |
+| ProteinMPNN（官方） | 0.1328 | **95** |
+
+补上 partner + complex structure 让 ProteinMPNN 从 **95 名升到 40 名** —— 幅度很大，但**仍然进不了第一梯队**
+（ProSST 0.486、ESM-IF1 0.360 都还在前面）。所以「给 partner 就能大幅提升」这个猜想
+**方向对、幅度被高估了**：它把 ProteinMPNN 从倒数拉到中游，没有让它变得有竞争力。
+
+### 5.5 caveats
+
+1. **子集口径不一致（只影响 "vs official" 一列）。** 我们的分数只算结构内可打分的变体
+   （`CD19` 79.6%、`SPIKE` 96.5%、`ACE2` 98.3%，其余 100%），官方是全部变体。
+   `monomer` vs `complex` 是同一子集上的配对比较，**不受影响**。
+2. **n=9 太小。** 所有 Wilcoxon 都在 9 个甚至 6 个样本上做的，p 值只能当参考。
+3. **decoding order 随机性。** M=1，本地重跑 `B2L11` 得 0.7157/0.7236/0.7256（Δ≈0.01），
+   远小于效应量级，但对 `Q53Z42`(−0.002)、`ACE2`(−0.004) 这种接近 0 的结果，符号不可信。
+4. **`B2L11` 的 +0.472 要单独看。** 它的 target 是 23aa 的 BH3 肽 —— 单体几乎没有结构信息，
+   加上 Mcl-1 后才第一次有了"结构"。这是极端情形，不能外推到一般的 binding assay。
+
+### 5.6 输出位置
+
+| | |
+|---|---|
+| 临时数据集 | `10.67.24.41:/data/guoj0f/ProteinGYM-bindingAssay-with-partener-and-complexStructure/dataset`（9 assay，各含 `complex.pdb` / `sequences.fasta` / `variants.csv` / `meta.json`） |
+| per-variant 分数 | 同上 `…/scores/`（18 个 csv，含 `mpnn_design_ll` / `mpnn_global_ll`） |
+| 汇总 | `results/per_assay.csv`、`results/leaderboard.csv` |
+| 日志 | `pgym_binding_partner_20260829-224541.out`（gitignore，留在两侧） |
+
+原 ProteinGym / BindingGYM 数据集**零写入**，已核对。

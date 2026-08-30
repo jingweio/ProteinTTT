@@ -12,6 +12,7 @@
 | 它**是不是**「43% 的 mutants」？ | **不是**。它是 **assay 未加权均值**；按 variant 加权是 **39.7%**（149,368 / 376,424）。而且它不描述任何一个 assay —— 分布双峰：**9/25 ≤ 0.001、11/25 ≥ 0.61**，中间只有 5 个（0.127–0.540）。 |
 | 界面定义**站得住吗**？ | **原定义有 bug**：它把「到结构里**任意其它链**的距离 < 5 Å」当作界面，于是抗体的 **VH–VL packing 也被算成结合界面**。改成「到该 assay 中**从不被突变的 partner 链**」后，assay 均值变成 **0.4697**，variant 加权 **0.4764**。 |
 | 这 43% 的 variant 是不是「没信号」？ | **不是**。碰界面的 variant 确实显著更差（16 个可检验 assay 里 15 个 q<0.05、方向全部一致），但**效应量很小**：**OVL 中位 0.697**（两组分布约 70% 重叠）、**P(不碰>碰) 中位 0.627**、**η² 中位 0.051**；不碰界面那一组仍保留全 assay **95%** 的 IQR。见 §5 Figure 1。 |
+| **WT 的 DMS_score 能用于 TTT 吗？** | **不能**（§7）。zero-shot 侧完全不接触 label；`intra_*` 微调会见到（但同 assay ~80% 的 label 都见到了），`inter_cluster` 不会。用于 TTT 的收益**上界是 0** —— BindingGYM 的每个 metric 都对预测的单调变换不变（已实测），而 WT 锚点只是一个 per-assay 标量。 |
 | **多少分算比 WT 好？** | 22/25 个 assay 带一行 WT 作为锚点，但 WT 的位置从 0.0% 分位跨到 100% 分位。15 个 assay 锚点 ≈ 0（**score > 0 即优于 WT**），7 个是具体数字（查 §6 Table D），**3 个没有 WT 行、无法判断**。超越 WT 是少数事件（正常 assay 2.9%–35%）。 |
 | 43% 从哪来？ | **来自文库设计，不是生物学**。10 个 assay 用「≤10 个位点」的设计型小文库（9 个 frac≈0，唯一例外是 5A12_VEGF），15 个 assay 用「≥34 个位点」的饱和扫描（frac 0.37–0.97）。两组 assay 均值 **0.113 vs 0.707**。 |
 
@@ -349,7 +350,88 @@ WT 行本身是干净的（`mutated_sequence` 校验通过），所以这是**�
 
 ---
 
-## 7. Caveats
+## 7. WT 的 DMS_score 会被模型接触到吗？能不能用于 TTT？
+
+（2026-08-30 补。证据全部来自本机 BindingGYM repo `/home/guoj0f/repos/BindingGYM` 的实际代码。）
+
+### 7.1 (a) Zero-shot：**完全不接触**
+
+- `grep -rn "DMS_score" modelzoo/ --include=*.py` **返回空** —— 打分侧只吃结构与序列，不读任何 label。
+- WT 的 label 只在下游 `calc_metric.py` 里出现，而且**只是 N 行中的一行**
+  （`get_zero_shot_metric_df` 断言 `df.shape[0] == orig_df.shape[0]`，WT 行**在评测集里**）。
+  它在 517–92,891 行里占 1 行，影响可忽略；3 个 assay 连这一行都没有。
+- **关键：没有任何一个 metric 以 WT 为阈值。** `calc_zero_shot_metric` 的二值化是
+  **`DMS_score > 90 分位`**（不是 `> WT`），MCC 的预测侧也是自身的 90 分位，
+  TopHit/BottomHit 取标签的上/下 10%，NDCG 走 rank。⇒ **WT 在任何一个已发布数字里都没有特殊地位。**
+
+### 7.2 (b) Fine-tuning：**看 split，且这是一条真实的泄漏轴**
+
+| split（`training/main.py --split`） | 切分粒度 | 测试 assay 的 WT label 是否被见过 |
+|---|---|---|
+| `random` | `KFold(5, shuffle)` over **行** | **是** —— WT 行落进 4/5 折的训练集 |
+| `contig` / `mod` | 按**位点**分折；代码把 WT 的 `pos` 显式设为 **0**（`if m == '': pos = 0`） | **是** —— 恒定在 fold 0 的 valid，其余 4 折在 train |
+| `inter_cluster` | `GroupKFold` over 官方 `BindingGYM_cluster.tsv` | **否** —— 整簇 held out |
+
+三个 `intra_*` 都是 **assay 内**切分：不只是 WT，该 assay **约 80% 的 label** 都在训练集里 ——
+WT 那一行不是「特殊泄漏」，只是普通的一行。**唯一的泛化设置是 `inter_cluster`**
+（论文 Table 5 的 0.42、我们复算的 0.422 vs zero-shot 0.397），**在它下面测试 assay 的 WT label 从未被见过**。
+
+### 7.3 能不能用于 test-time training？—— **对 BindingGYM 的指标：不能。三条独立理由，任一条都致命**
+
+**① 秩不变性（决定性，已实测）。** BindingGYM 的每一个 metric 都是 rank / 自身分位数的函数
+⇒ 对预测向量的**任意严格单调变换恒等不变**。用真实 assay 实测（`KRAS_RALGDS-RBD`，逐行照抄官方
+`calc_zero_shot_metric`）：
+
+| 对预测做的变换 | Spearman | AUC | MCC | NDCG | AP |
+|---|---:|---:|---:|---:|---:|
+| 原始 | 0.257323 | 0.609187 | 0.059876 | 0.655475 | 0.136143 |
+| 减去 WT 的 DMS_score | 0.257323 | 0.609187 | 0.059876 | 0.655475 | 0.136143 |
+| 仿射对齐到 WT（a·x+b） | 0.257323 | 0.609187 | 0.059876 | 0.655475 | 0.136143 |
+| 任意单调（tanh / exp） | 0.257323 | 0.609187 | 0.059876 | 0.655475 | 0.136143 |
+
+WT 的 DMS_score 是**一个 per-assay 标量**，它能对预测做的最多就是平移/缩放 ⇒ **Δ 恒等于 0**。
+即使把它用到极致，榜单上一个数字都不会动。
+
+**② 信息量：对多数 assay 恒为 0，而且是循环的。** §6 已给出 —— 15/25 个 assay 的 WT ≈ 0
+是**归一化的定义**（分数本身就是「相对 WT」），不是一次测量；把它喂回模型是同义反复。
+3/25 根本没有这一行。真正带信息的只有 7/25，而且仍然只是**一个数**。
+
+**③ 没有可反传的训练信号。** ProteinTTT 的 TTT 是在目标序列上做自监督 MLM。
+一个标量 label 无法在 variant 集合上构造梯度 —— 要把 label 变成 loss 至少需要**两个以上**
+variant 的相对关系，那已经是有监督微调，不是 TTT。
+
+### 7.4 必须区分的两个「WT 锚点」
+
+| | 是什么 | 要不要 label | 在 BindingGYM 上有没有用 |
+|---|---|---|---|
+| **WT 的 DMS_score** | 实验测量值 = **label** | 要 | 秩不变 ⇒ 无用（且用了就不再是 zero-shot） |
+| **WT 的 model score** | 模型对 WT 复合物的打分 | **不要** | 也是 assay 内**常数** ⇒ 同样秩不变，同样无用 |
+
+第二行值得单独说：既往 audit 已确认 BindingGYM 的 ProteinMPNN 分数是 mask 上 NLL 求和取负，
+**没有 WT 项**（ProteinGym 风格的 `score(mt) − score(wt)` 它不做）。补上这一项是**免费且合法**的，
+但因为 `score(wt)` 在 assay 内是常数，**它同样不会改变任何 metric**。
+它只在两种情况下有意义：**跨 assay 池化**（BindingGYM 是逐 assay 算 ρ 再平均，所以用不上）、
+以及把绝对分数放到可比刻度上。
+
+### 7.5 那 WT 锚点什么时候真的有用
+
+- **前瞻性筛选**：「哪些设计超过 WT」是真实的部署问题，需要 WT 锚点 + 校准过的模型分数。
+  但这不是 BindingGYM 的任何一个指标，而且 §6 已说明**没有 replicate/标准误**，无法设显著性阈值。
+- **诊断**：检查模型给 WT 的分位数是否合理。注意 §6 那三个反常 assay
+  （`5A12_VEGF` 的 WT 在 **0 分位**）会让任何 WT 锚定的校准在那里彻底失准。
+
+### 7.6 给 complexTTT 的可执行结论
+
+1. **不要把 WT 的 DMS_score 当作 TTT 信号** —— 它既改不动指标，又会让结果失去 zero-shot 资格。
+2. test time 真正可用且 **label-free** 的东西是：**WT 复合物结构**、**MSA**（22 个 .a2m 已在本机）、
+   以及**未标注的 test variant 集合本身**（transductive TTT）。这三样都不触碰 label。
+3. 任何声称的增益必须在 **`inter_cluster`** 或纯 zero-shot 下报告 —— `intra_*` 的数字含约 80% 的同 assay label。
+4. 更一般的纪律：**任何 per-assay 标量、任何对预测的单调后处理，在这个 benchmark 上的收益上界都是 0。**
+   要涨分只能改变 **variant 之间的相对排序**。
+
+---
+
+## 8. Caveats
 
 1. **界面算在唯一一个 WT 复合物结构上**，22 个结构里 15 个是同源模型（`_hm`）。没有建模突变引起的构象变化，也没有逐 variant 结构。
 2. **`4ZFF_CHL.pdb` 只有 C/H/L 三条链，而 PDB 4ZFF 沉积了 6 条**（VEGF 是同源二聚体）。若表位跨越两个 VEGF 原体，`5A12_VEGF` 的界面会被低估。旁证：把 cutoff 放到 8 Å，该 assay 的 frac 从 1.000 掉到 0.090。这条**没有排除**。
@@ -362,7 +444,7 @@ WT 行本身是干净的（`mutated_sequence` 校验通过），所以这是**�
 
 ---
 
-## 8. 复现
+## 9. 复现
 
 ```
 scripts/binding_sites/
@@ -378,6 +460,7 @@ scripts/binding_sites/
   s9_tableC.py       生成 Table C 与稳健性表
   s10_wt.py          提取每个 assay 的 WT 锚点与超越比例
   s11_wt_table.py    生成 Table D
+  s12_metric_invariance.py  实测 BindingGYM 全部 metric 对预测的单调变换不变（§7.3 的判据）
 ```
 
 输入：`/home/guoj0f/share/BindingGYM/input/`（`BindingGYM.csv` + `Binding_substitutions_DMS/` 25 个 csv + `structures/` 22 个 pdb）。

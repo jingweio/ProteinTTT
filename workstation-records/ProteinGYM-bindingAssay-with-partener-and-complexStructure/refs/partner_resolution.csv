@@ -1,0 +1,10 @@
+PG_assay,target_len,partner_name,source,accession,partner_len,bg_partner_len,bg_partner_X,verify_segments,verify_residues,complex_len,partner_md5,identity_to_bg_fragment
+ACE2_HUMAN_Chan_2020,805,SARS-CoV-2 Spike glycoprotein,uniprot,P0DTC2,1273,183,0,1/1,183/183,2078,4c35f09aac2f,100.0%
+SPIKE_SARS2_Starr_2020_binding,1273,Human ACE2,uniprot,Q9BYF1,805,597,0,1/1,597/597,2078,906dc56d5c9c,100.0%
+B2L11_HUMAN_Dutta_2010_binding-Mcl-1,198,Mcl-1,uniprot,Q07820,350,150,7,2/2,143/143,548,ac05f6a57fb5,100.0%
+Q53Z42_HUMAN_McShan_2019_binding-TAPBPR,365,TAPBPR (tapasin-related),uniprot,Q9BX59,468,370,53,7/9,181/317,833,48612c6f77b7,n/a
+SPG1_STRSG_Olson_2014,448,IgG1 heavy chain constant region,uniprot,P01857,399,206,0,0/1,0/206,847,bb753c923d4d,96.6%
+SPG1_STRSG_Wu_2016,448,IgG1 heavy chain constant region,uniprot,P01857,399,206,0,0/1,0/206,847,bb753c923d4d,96.6%
+DLG4_RAT_McLaughlin_2012,724,Rat CRIPT,uniprot,Q792Q4,101,5,0,1/1,5/5,825,ff0ac5a7d5ce,100.0%
+CD19_HUMAN_Klesmith_2019_FMC_singles,556,FMC63 scFv,construct,BindingGYM 7URV chain D + (G4S)3 linker 补全 15 个 X,242,242,15,2/2,227/227,798,c58fd1c68ba8,100.0%
+YAP1_HUMAN_Araya_2012,504,PPxY-motif peptide ligand,peptide,BindingGYM 1JMQ chain P（肽即完整配体）,10,10,0,1/1,10/10,514,6148d9007981,100.0%

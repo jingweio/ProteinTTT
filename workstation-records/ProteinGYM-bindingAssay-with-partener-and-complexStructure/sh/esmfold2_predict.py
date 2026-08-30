@@ -74,8 +74,9 @@ def main():
                                num_sampling_steps=a.num_sampling_steps,
                                num_diffusion_samples=1, seed=a.seed, complex_id=_id)
             tmp = op(a.out_dir, _id) + ".tmp"
+            # fold() returns MolecularComplex (no PDB writer); ProteinComplex has one.
             with open(tmp, "w") as f:
-                f.write(res.complex.to_pdb_string())
+                f.write(res.complex.to_protein_complex().to_pdb_string())
             os.replace(tmp, op(a.out_dir, _id))
             pk = torch.cuda.max_memory_allocated() / 1e9
             tsv.write(f"{_id}\t{len(cids)}\t{L}\t{float(res.plddt.mean()):.4f}\t"

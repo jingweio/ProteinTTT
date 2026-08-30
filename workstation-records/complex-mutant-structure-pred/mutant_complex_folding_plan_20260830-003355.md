@@ -1,6 +1,6 @@
 # complex-mutant-structure-pred — ESMFold2-Fast mutant complex folding
 
-（created 2026-08-30 00:33; status: **PILOT DONE / PLANNED** —— pilot 已跑完并推翻了原成本估算；生产运行待用户拍板）
+（created 2026-08-30 00:33; status: **D0 DONE / PLANNED** —— pilot 已跑完并推翻了原成本估算；生产运行待用户拍板）
 
 ## 1. Goal / hypothesis
 
@@ -203,6 +203,53 @@ workflow 的 pilot Stage-0 把 TF32 列为"最高优先级、2–8× 的开关"�
 `pip install xformers` → `set_kernel_backend("fused")` → trunk bf16（SOP §4.1 说有 dtype bug，需复核）
 → `torch.compile` → 换 cu126 torch（CUDA minor version compatibility，绕开 2.5.1 这个 8 个 minor 版本的降级）。
 **若能拿回 3–5×，1,013 h 会降到 200–340 h，项目性质完全不同。**
+
+### 7.6 D0 结果：拿回了 **17.8×**，并发现 seed 噪声威胁项目前提
+
+**(a) 环境 + 官方 kernel 旋钮，合计 17.8×**（A100-80GB，10 loops / 68 steps / 1 sample）
+
+| L | 旧 env<br>torch 2.5.1+cu121 | 新 env<br>torch 2.11.0+cu128 | ＋`set_kernel_backend("fused")` | **累计** |
+|--:|--:|--:|--:|--:|
+| 262 | 10.50 s | 4.96 s | **2.08 s** | **5.0×** |
+| 528 | 55.73 s | 23.96 s | **5.30 s** | **10.5×** |
+| 791 | 226.45 s | 97.71 s | **12.74 s** | **17.8×** |
+
+- **CUDA 规则实测**：`cu128` wheel 在 CUDA 12.2 驱动上正常运行（minor version compatibility），
+  torch 2.5.1 → 2.11.0 单独就是 **2.1–2.3×**。原"必须 ≤12.2"是把 major 边界的教训过度推广了；
+  `workstation-usage` / `ibex-usage` 两个 skill 已按实测修订。
+- **两个旋钮都是官方公开 API，未改任何模型代码**；`fused` 是 fork 自带的 Triton kernel，
+  论文 §A.2.11 本身就用 fused kernel —— 打开它是**靠近**官方配置而非偏离。
+
+**(b) 数值一致性核验（用户约束）：`fused` 的偏差远小于模型自身噪声**
+
+| 对照（同一 WT，CA-RMSD，Kabsch 对齐） | L=528 | L=791 |
+|---|--:|--:|
+| default seed0 vs **fused** seed0 | **0.55 Å** | **0.029 Å** |
+| default seed0 vs default seed1 | 11.59 Å | 0.73 Å |
+| default seed0 vs default seed2 | 13.59 Å | 3.73 Å |
+
+kernel 差异比 seed 差异小 **21–25×** → 在这个模型的随机性面前不构成偏离，可安全采用。
+
+**成本修正（第二次）**：24 个有效 assay × 抽样 1500 从 **1,013 → ~57 A100-h**（单卡约 2.4 天）；
+全量 376,446 从 7,728 → **~434 A100-h**。
+
+**(c) 🔴 seed 噪声本身是个大问题 —— D1 的 NULL TEST 已被这组数据部分回答**
+
+`5A12_VEGF`（L=528，antibody-antigen，iptm≈0.70）：**同一条 WT 序列换 seed，全复合物 CA-RMSD 就是 11.6–13.6 Å。**
+`SARS2-RBD`（L=791，iptm≈0.91）：0.73–3.73 Å。
+
+→ **ipTM 高的体系 seed 稳定，ipTM 低的体系近乎随机。** 而目标 (a) 要测的
+"mutant vs WT 的 backbone deviation"在文献里被反复测出对点突变几乎不敏感 ——
+**在 5A12_VEGF 这类 assay 上，突变信号必然被 seed 噪声完全淹没。**
+
+三条推论：
+1. **config C（多 sample + ipTM top-1）不是性价比选项，是必需品** —— 它正是压 seed 噪声的机制。
+2. **排序要加一个新维度：WT 的 ipTM。** ipTM 低的 assay 应降权甚至排除，
+   因为在那里"mutant 结构"根本不是一个稳定量。**必须先跑 Stage-0（24 个 WT × 5 seeds）
+   拿到逐 assay 的 ipTM 与噪声底，才能定最终排序。**
+3. ⚠️ 待厘清：11.6 Å 里有多少来自**链间 docking pose** 变化、多少来自**链内 fold** 变化？
+   对目标 (a) 这是两个不同问题。`complex` 对象自带官方的 `dockq` / `lddt_ca` / `rmsd`，
+   Stage-0 应逐链分别算 + 算界面指标。
 
 ## 关联
 

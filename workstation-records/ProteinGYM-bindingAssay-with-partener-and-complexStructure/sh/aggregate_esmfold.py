@@ -36,6 +36,9 @@ if a.crystal_scores and os.path.isdir(a.crystal_scores):
 off = pd.read_csv(a.official)
 off.columns = [c.replace("\n", " ").strip() for c in off.columns]
 off = off.set_index("DMS ID").drop(columns=["Number of Mutants"], errors="ignore")
+# restrict to THESE assays before any averaging -- otherwise the leaderboard reports
+# each model's all-217-assay mean, which is not comparable to ours
+off = off.loc[[i for i in t.index if i in off.index]]
 t = t.join(off, how="left")
 
 cols = ["n", "ProteinMPNN", "esmfold_monomer", "esmfold_complex"]

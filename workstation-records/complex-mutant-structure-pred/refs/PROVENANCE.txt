@@ -48,3 +48,19 @@ fold_metrics.tsv.gz                                               （2026-08-31 
   统计结果已写入主记录 §4c；原始结构在
   /data/guoj0f/share/our-predicted-structure/ProteinTTT-bindingGYM-mutation-structure-analysis/
   complex-mutant-structure-pred/（399 MB + 1.6 MB，不进 git）。
+
+deviation_per_mutant.json.gz                                      （2026-08-31 追加）
+  sh/analyze_deviation.py 的输出：6,001 个 mutant 逐条的四个口径 CA-RMSD
+  （rmsd_all / rmsd_mutchain / rmsd_site_local / rmsd_site_inchn）+ k + dms_score，
+  另含每 assay 的 WT seed 噪声底（seed0 vs seed1..4，以及全部 seed 两两配对）。
+  对照均为「同一 seed(0) 的 WT」，不用 BindingGYM 晶体结构（4/5 个 assay 的 WT 晶体含未解析残基）。
+  统计与直方图见 deviation_analysis_20260831-152601.md。
+
+binding_sites_per_chain.csv                                       （2026-08-31 追加）
+  binding sites 定义，D1 口径（被突变链上重原子到 partner 侧 <= 5 A）。
+  从 bindingGYM-binding-sites-analysis 分支的 scripts/binding_sites/s3_interface.py 重跑生成
+  （该分支的 analysis_out/ 未入 git）。关键列 site_seqpos = **1-based 链内序列位置**，
+  与我们预测结构的残基顺序一致，可直接索引；site_pdbres 是对应的 PDB 残基号（两者差一个偏移）。
+  本次用到：SARS2-RBD 链 E 21 个 / CXCR4 链 R 37 个 / hYAP65 链 A 11 个。
+  定义与映射校验见 bindingGYM-binding-sites-analysis 的
+  local-records/binding-sites-analysis/BindingGYM_binding_sites_20260829.md §2。

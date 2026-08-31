@@ -1,0 +1,77 @@
+{
+  "rng_seed": 20260830,
+  "per_assay": 2000,
+  "min_stratum": 30,
+  "single_floor": 300,
+  "n_wt": 15,
+  "n_mutant": 6001,
+  "manifest_gz_md5": "0a3acb85a05dabf33b2abbfde9a03cbc",
+  "assays": [
+    {
+      "assay": "SARS2-RBD_ACE2_deltaKd_6M0J",
+      "L": 791,
+      "n_total": 21872,
+      "n_picked": 2000,
+      "n_single": 300,
+      "n_single_avail": 3134,
+      "strata": {
+        "0": 1,
+        "1": 300,
+        "2": 709,
+        "3": 513,
+        "4": 260,
+        "5": 113,
+        "6": 38,
+        "7": 30,
+        "8": 30,
+        "9": 5,
+        "10": 1
+      }
+    },
+    {
+      "assay": "CXCR4_CXCL12_enrich_8U4O",
+      "L": 360,
+      "n_total": 5585,
+      "n_picked": 2001,
+      "n_single": 2000,
+      "n_single_avail": 5584,
+      "strata": {
+        "0": 1,
+        "1": 2000
+      }
+    },
+    {
+      "assay": "hYAP65_peptide_FunctioncalScore_1JMQ",
+      "L": 56,
+      "n_total": 18407,
+      "n_picked": 2000,
+      "n_single": 288,
+      "n_single_avail": 288,
+      "strata": {
+        "0": 1,
+        "1": 288,
+        "2": 717,
+        "3": 717,
+        "4": 151,
+        "5": 30,
+        "6": 30,
+        "7": 11,
+        "8": 5,
+        "9": 4,
+        "10": 4,
+        "11": 6,
+        "12": 5,
+        "13": 8,
+        "14": 4,
+        "15": 4,
+        "16": 3,
+        "17": 3,
+        "18": 1,
+        "19": 2,
+        "20": 4,
+        "21": 2
+      }
+    }
+  ],
+  "note": "5 assay 版见 git 历史；GB1/CD19 因 WT seed 噪声底过高（5.7/5.3 A）于 Stage-0 后剔除"
+}

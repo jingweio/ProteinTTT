@@ -32,3 +32,19 @@ pseudolabel_survey_lenses_20260829.json.gz                       （2026-08-29 �
   合计 113 items（全部带 verdict）+ 58 条 missing。记录 md 的正文即由此合成，
   凡与本文件冲突处，以本文件的 verdicts 为准。
   解压：gzip -dc pseudolabel_survey_lenses_20260829.json.gz | python3 -m json.tool | less
+
+fold_manifest.csv.gz / fold_manifest_meta.json                    （2026-08-30 追加）
+  冻结的分层抽样（3 assay × 2000 + WT×5seeds = 6,016 行）。RNG seed 20260830，
+  k 分层，k=1 保底 300、其余档保底 30。列：id/assay/kind/seed/k/chains/seqs/total_len/row_idx/dms_score。
+  下游只读此文件，不重算（workstation-usage §3-0）。meta.json 记 md5 与逐 assay 的 strata 分配。
+
+fold_metrics.tsv.gz                                               （2026-08-31 追加）
+  折叠产出的逐结构指标，6,026 行 + 表头。由 sh/fold_complexes.py 写出，
+  从 workstation 的 results/fold_logs/metrics.tsv 拉回（workstation-usage §6-1）。
+  列：id assay kind k seed total_len ptm iptm plddt_mean seconds
+  ⚠ ptm/iptm/plddt_mean 均为 ESMFold2 的 0-1 尺度，与 AF2 PDB 的 B-factor(0-100) 不可直接比。
+  6,026 = manifest 的 6,016 + Stage-0 时折的 GB1/CD19 各 5 个 WT seed（那两个 assay 已剔除，
+  其 WT 结构与指标留作剔除依据，见主记录 §4）。
+  统计结果已写入主记录 §4c；原始结构在
+  /data/guoj0f/share/our-predicted-structure/ProteinTTT-bindingGYM-mutation-structure-analysis/
+  complex-mutant-structure-pred/（399 MB + 1.6 MB，不进 git）。

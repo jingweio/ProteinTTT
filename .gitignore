@@ -142,3 +142,9 @@ workstation-records/**/*.out
 workstation-records/**/*.err
 workstation-records/**/results/*.csv
 workstation-records/**/results/*.pkl
+
+# local-records: keep scripts + result markdown, drop bulk artefacts
+local-records/**/*.out
+local-records/**/*.err
+local-records/**/results/*.csv
+local-records/**/results/*.pkl

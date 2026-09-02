@@ -9,6 +9,9 @@ import numpy as np, pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # runnable from any cwd
+from bg_common import OUT_DIR, REC_DIR
 
 mpl.rcParams.update({
     "font.family": "sans-serif",
@@ -20,7 +23,7 @@ mpl.rcParams.update({
     "xtick.major.size": 2.5, "ytick.major.size": 2.5,
 })
 C_IFACE, C_NON = "#B64342", "#0F4D92"          # signal family / neutral-baseline family
-D = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis"
+D = REC_DIR
 
 SHORT = {
  "4D5_HER2_fitness_1N8Z":"4D5 – HER2", "5A12_Ang2_fitness_4ZFG":"5A12 – Ang2",
@@ -103,5 +106,7 @@ fig.text(.5, .0005, "OVL = overlap coefficient (1 = identical distributions)  ·
          ha="center", fontsize=7.5, color="#4D4D4D")
 fig.tight_layout(rect=[0, .028, 1, .985])
 fig.savefig(f"{D}/fig_dms_distribution_by_interface.png", dpi=300, bbox_inches="tight")
-fig.savefig(f"{D}/fig_dms_distribution_by_interface.pdf", bbox_inches="tight")
+# CreationDate=None keeps the PDF byte-reproducible across reruns
+fig.savefig(f"{D}/fig_dms_distribution_by_interface.pdf", bbox_inches="tight",
+            metadata={"CreationDate": None})
 print("saved PNG + PDF")

@@ -62,4 +62,4 @@ pd.set_option("display.width", 260)
 print(rep.to_string(index=False))
 print("\nTOTAL conflicts:", int(rep["emp_conflict"].fillna(0).sum()),
       " TOTAL emp positions missing coords:", int(rep["emp_missing_in_struct"].fillna(0).sum()))
-rep.to_csv("../../local-records/binding-sites-analysis/data/residue_map_crosscheck.csv", index=False)
+rep.to_csv(f"{OUT_DIR}/residue_map_crosscheck.csv", index=False)

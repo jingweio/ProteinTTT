@@ -25,4 +25,4 @@ print("\nassays with a WT row:", int(t.n_wt_rows.gt(0).sum()), "/ 25")
 print("no WT row:", ", ".join(t.loc[t.n_wt_rows == 0, "DMS_id"]))
 print("\nwt_score == 0 exactly:", int((t.wt_score == 0).sum()),
       " |wt_score| < 1e-6:", int((t.wt_score.abs() < 1e-6).sum()))
-t.to_csv("../../local-records/binding-sites-analysis/data/wt_reference.csv", index=False)
+t.to_csv(f"{OUT_DIR}/wt_reference.csv", index=False)

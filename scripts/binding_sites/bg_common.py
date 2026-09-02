@@ -7,6 +7,11 @@ ROOT = "/home/guoj0f/share/BindingGYM/input"
 DMS_DIR = os.path.join(ROOT, "Binding_substitutions_DMS")
 PDB_DIR = os.path.join(ROOT, "structures")
 
+# Single source of truth for where artefacts go. Every script writes here;
+# do not reintroduce a second output directory.
+REC_DIR = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis"
+OUT_DIR = os.path.join(REC_DIR, "data")
+
 THREE2ONE = {
  'ALA':'A','ARG':'R','ASN':'N','ASP':'D','CYS':'C','GLN':'Q','GLU':'E','GLY':'G',
  'HIS':'H','ILE':'I','LEU':'L','LYS':'K','MET':'M','PHE':'F','PRO':'P','SER':'S',

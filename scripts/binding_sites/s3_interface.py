@@ -5,7 +5,7 @@ from scipy.spatial import cKDTree
 from bg_common import *
 import difflib
 
-OUT = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/analysis_out"
+OUT = OUT_DIR
 os.makedirs(OUT, exist_ok=True)
 CUTOFFS = [4.0, 4.5, 5.0, 6.0, 8.0]
 PRIMARY = 5.0

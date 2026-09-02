@@ -1,6 +1,9 @@
 import numpy as np, pandas as pd
-D="../../local-records/binding-sites-analysis/data"
-w=pd.read_csv(f"{D}/wt_reference.csv"); v=pd.read_parquet(f"{D}/variant_labels.parquet")
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # runnable from any cwd
+from bg_common import OUT_DIR, REC_DIR
+
+w=pd.read_csv(f"{OUT_DIR}/wt_reference.csv"); v=pd.read_parquet(f"{OUT_DIR}/variant_labels.parquet")
 rows=[]
 for _,r in w.iterrows():
     g=v[v.DMS_id==r.DMS_id]

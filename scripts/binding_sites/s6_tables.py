@@ -1,6 +1,9 @@
 """S6: render the markdown tables used in the record."""
 import numpy as np, pandas as pd
-D = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data"
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # runnable from any cwd
+from bg_common import OUT_DIR, REC_DIR
+D = OUT_DIR
 a = pd.read_csv(f"{D}/assay_summary.csv"); s = pd.read_csv(f"{D}/binding_sites_per_chain.csv")
 st = pd.read_csv(f"{D}/stats_iface_vs_noniface.csv"); rb = pd.read_csv(f"{D}/robustness.csv")
 ve = pd.read_csv(f"{D}/variance_explained.csv")

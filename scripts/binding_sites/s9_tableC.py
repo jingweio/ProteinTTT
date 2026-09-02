@@ -1,5 +1,8 @@
 import numpy as np, pandas as pd
-D = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data"
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # runnable from any cwd
+from bg_common import OUT_DIR, REC_DIR
+D = OUT_DIR
 st = pd.read_csv(f"{D}/stats_iface_vs_noniface_extended.csv")
 old = pd.read_csv(f"{D}/stats_iface_vs_noniface.csv")[["DMS_id","cliffs_delta_depthstrat"]]
 rb = pd.read_csv(f"{D}/robustness.csv")[["DMS_id","delta_dsasa","delta_singles"]]

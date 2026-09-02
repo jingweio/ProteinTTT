@@ -466,5 +466,12 @@ scripts/binding_sites/
 输入：`/home/guoj0f/share/BindingGYM/input/`（`BindingGYM.csv` + `Binding_substitutions_DMS/` 25 个 csv + `structures/` 22 个 pdb）。
 纯 CPU，全流程约 3 分钟，无 GPU 依赖。产物在 `data/`。
 
+**按 s1 → s12 顺序跑即可，可从任意 cwd 执行**（每个脚本自己把所在目录加进 `sys.path`）。
+产物路径只有一处定义 —— `bg_common.py` 的 **`REC_DIR` / `OUT_DIR`**，改路径只改这里，
+不要在单个脚本里再写第二个输出目录。
+
+**可复现性**：整条链确定性，重跑后 9 个 csv 与 PNG **逐字节相同**，parquet 内容相同；
+PDF 用 `metadata={"CreationDate": None}` 关掉时间戳后也逐字节相同。
+
 依赖：numpy / pandas / scipy / matplotlib（**不需要 biopython**，PDB 解析与 SASA 都是自带实现）。
 图内文字用英文：本机只有 DejaVu Sans 能被 matplotlib 用作默认族，中文字形缺失且 Noto CJK 的 fallback 不生效。

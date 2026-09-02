@@ -1,8 +1,11 @@
 """S4: does DMS_score differ between binding-site-touching and non-touching variants?"""
 import numpy as np, pandas as pd
 from scipy import stats
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # runnable from any cwd
+from bg_common import OUT_DIR, REC_DIR
 
-OUT = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/analysis_out"
+OUT = OUT_DIR
 v = pd.read_parquet(f"{OUT}/variant_labels.parquet")
 COL = "iface_dist_5.0"
 MIN_N = 30

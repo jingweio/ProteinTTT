@@ -1,7 +1,10 @@
 """S7: extend the two-group comparison with means and two overlap measures."""
 import numpy as np, pandas as pd
 from scipy import stats
-D = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data"
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # runnable from any cwd
+from bg_common import OUT_DIR, REC_DIR
+D = OUT_DIR
 v = pd.read_parquet(f"{D}/variant_labels.parquet")
 COL = "iface_dist_5.0"
 

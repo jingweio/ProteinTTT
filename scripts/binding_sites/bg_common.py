@@ -80,3 +80,19 @@ def find_offset(pdb_seq, wt_seq):
         if ok:
             return o
     return None
+
+# Short display names for the 25 assays (shared by every figure script).
+SHORT = {
+ "4D5_HER2_fitness_1N8Z":"4D5 – HER2", "5A12_Ang2_fitness_4ZFG":"5A12 – Ang2",
+ "5A12_VEGF_fitness_4ZFF":"5A12 – VEGF", "Z-domain_ZpA963_HL1_fitness_2M5A":"Z-dom ZpA963 HL1",
+ "Z-domain_ZpA963_HL2_fitness_2M5A":"Z-dom ZpA963 HL2", "Z-domain_ZSPA-1_LL1_fitness_1LP1":"Z-dom ZSPA-1 LL1",
+ "Z-domain_ZSPA-1_LL2_fitness_1LP1":"Z-dom ZSPA-1 LL2", "CXCR4_CXCL12_enrich_8U4O":"CXCR4 – CXCL12",
+ "hYAP65_peptide_FunctioncalScore_1JMQ":"hYAP65 – peptide", "GB1_IgG-Fc_fitness_1FCC":"GB1 – IgG-Fc",
+ "GB1_IgG-Fc_fitness_1FCC_2016":"GB1 – IgG-Fc (2016)", "SARS2-RBD_ACE2_deltaKd_6M0J":"SARS2-RBD – ACE2",
+ "KRAS_DARPinK27_norfitness_5O2S":"KRAS – DARPin K27", "KRAS_PICK3CG-RBD_norfitness_1HE8":"KRAS – PI3KCG-RBD",
+ "KRAS_RAF1_norfitness_6VJJ":"KRAS – RAF1", "KRAS_RAF1-RBD_norfitness_6VJJ":"KRAS – RAF1-RBD",
+ "KRAS_RALGDS-RBD_norfitness_1LFD":"KRAS – RALGDS-RBD", "KRAS_SOS1_norfitness_8BE4":"KRAS – SOS1",
+ "BH3_Mcl-1_normed_3KZ0":"BH3 – Mcl-1", "BH3_Bcl-xL_normed_1PQ1":"BH3 – Bcl-xL",
+ "HLA-A2_TAPBPR_meanscore_5WER":"HLA-A2 – TAPBPR", "PSD95_CRIPT_1BE9":"PSD95 – CRIPT",
+ "PSD95_Tm2F_1BE9":"PSD95 – Tm2F", "ACE2_SARS2-RBD_enrich_6M17":"ACE2 – SARS2-RBD",
+ "CD19_FMC63_Fitness_7URV":"CD19 – FMC63"}

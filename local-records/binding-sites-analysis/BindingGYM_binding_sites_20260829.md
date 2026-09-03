@@ -37,6 +37,10 @@
 
 ## 2. binding-interface / binding-site 怎么定义
 
+> **一句话定义：** 在该 assay 唯一那份 **WT 复合物**结构上，先按**元数据**（而非 mutation 数据）把链划成
+> 两个 binding entity，则**任一重原子到「另一个 entity」的最小距离 ≤ 5 Å 的残基**就是 binding site
+> —— 所以同一 entity 内部的链间接触（如 Fab 的 VH–VL packing）和链内接触都**不算**。
+
 BindingGYM **不提供**界面标注，必须自己从结构算。下面先给形式定义与前提，再逐项解释为什么这样选。
 
 ### 2.0 形式定义

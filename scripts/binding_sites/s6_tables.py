@@ -22,7 +22,7 @@ def compact(ids):
     return ",".join(out + sorted(other))
 
 # ---- Table A: binding-site ranges ----
-print("### Table A  每个 assay 的 binding-site 残基（D1, heavy-atom <= 5 A to partner）\n")
+print("### Table A  每个 assay 的 binding-site 残基（D1: heavy-atom ≤ 5 Å to the OTHER entity）\n")
 print("| assay | 被突变链 | partner 链 | binding-site 残基（PDB 编号，逐链） | n_site / L |")
 print("|---|---|---|---|---|")
 for _, r in a.iterrows():

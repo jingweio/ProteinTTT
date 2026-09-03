@@ -10,7 +10,7 @@
 |---|---|
 | 43% 这个数**算得对吗**？ | **对**。在原口径（D0）下，25 个 assay 的 `frac_no_iface` **未加权均值 = 0.4295**，我独立重算得 **0.429504**，25/25 逐 assay 吻合。 |
 | 它**是不是**「43% 的 mutants」？ | **不是**。它是 **assay 未加权均值**；按 variant 加权是 **39.7%**（149,368 / 376,424）。而且它不描述任何一个 assay —— 分布双峰：**9/25 ≤ 0.001、11/25 ≥ 0.61**，中间只有 5 个（0.127–0.540）。 |
-| 界面定义**站得住吗**？ | **原定义有 bug**：它把「到结构里**任意其它链**的距离 < 5 Å」当作界面，于是抗体的 **VH–VL packing 也被算成结合界面**。改成「到该 assay 中**从不被突变的 partner 链**」后，assay 均值变成 **0.4697**，variant 加权 **0.4764**。 |
+| 界面定义**站得住吗**？ | 现在的定义是 **entity-based、与 mutation 无关**（§2b，元数据 + 纯结构双路验证）。**原定义有 bug**：它把「到结构里**任意其它链**的距离 < 5 Å」当作界面，于是抗体的 **VH–VL packing 也被算成结合界面**。改成「到该 assay 中**从不被突变的 partner 链**」后，assay 均值变成 **0.4697**，variant 加权 **0.4764**。 |
 | 这 43% 的 variant 是不是「没信号」？ | **不是**。碰界面的 variant 确实显著更差（16 个可检验 assay 里 15 个 q<0.05、方向全部一致），但**效应量很小**：**OVL 中位 0.697**（两组分布约 70% 重叠）、**P(不碰>碰) 中位 0.627**、**η² 中位 0.051**；不碰界面那一组仍保留全 assay **95%** 的 IQR。见 §5 Figure 1。 |
 | **WT 的 DMS_score 能用于 TTT 吗？** | **不能**（§7）。zero-shot 侧完全不接触 label；`intra_*` 微调会见到（但同 assay ~80% 的 label 都见到了），`inter_cluster` 不会。用于 TTT 的收益**上界是 0** —— BindingGYM 的每个 metric 都对预测的单调变换不变（已实测），而 WT 锚点只是一个 per-assay 标量。 |
 | **多少分算比 WT 好？** | 22/25 个 assay 带一行 WT 作为锚点，但 WT 的位置从 0.0% 分位跨到 100% 分位。15 个 assay 锚点 ≈ 0（**score > 0 即优于 WT**），7 个是具体数字（查 §6 Table D），**3 个没有 WT 行、无法判断**。超越 WT 是少数事件（正常 assay 2.9%–35%）。 |
@@ -42,20 +42,39 @@ BindingGYM **不提供**界面标注，必须自己从结构算。三个要素�
 **(a) 在哪个结构上算。** 每个 assay 只有一个 **WT 复合物**结构（`input/structures/`，22 个文件覆盖 25 assay，其中 15 个是 `_hm` 同源模型）。
 没有逐 variant 结构，所以界面是**在野生型坐标上一次算定**、所有 variant 共用。
 
-**(b) 谁是 partner。** 关键的一步，也是原口径出错的地方。每个 assay 按「该 assay 里**有没有被突变过**」把链分成两侧：
+**(b) 两个 binding entity 是谁。** 关键的一步，也是原口径出错的地方。
+**界面是复合物的性质，不是文库的性质** —— 所以这一步**不看 mutation 数据**：先把复合物的链
+划分成两个 binding entity `E1` / `E2`，两条互相独立的、都与 mutation 无关的路子：
 
-- **mutated 侧** = 至少出现过一次突变的链
-- **partner 侧** = 从不被突变的链（21/25 个 assay 非空）
+1. **元数据**：`DMS_id` 本身就写着两个 partner（`4D5_HER2` = Fab 4D5 vs HER2）。
+   只有 3 个 assay 有 >2 条链需要指定链归属（见下表），2 条链的复合物划分是**唯一确定**的。
+2. **纯结构**：枚举链的所有 2-划分，取**跨划分接触最小**的那个。对 Fab 这会正确地切在
+   Fab↔抗原之间，因为 **VH–VL 界面远大于 paratope–epitope 界面**。
 
-> 4 个 Z-domain assay 两条链都被突变，partner 侧为空 ⇒ 退化处理为「链 A ↔ 链 B」（对这四个 assay 这**就是**结合界面）。
+两条路子在 3 个多链 assay 上**全部一致，且余量很大**（脚本 `s13_entity_interface.py` 里是 assert）：
 
-**(c) 距离判据。** 主口径 **D1**：mutated 链上的残基 *i* 是 binding-site 残基 ⟺
-*i* 的任一**重原子**到 partner 侧任一重原子的距离 **≤ 5.0 Å**。
+| assay | E1 | E2 | 选中划分的跨界面残基 | 次优划分 |
+|---|---|---|---:|---:|
+| `4D5_HER2_fitness_1N8Z` | `AB` = VL+VH (Fab 4D5) | `C` = HER2 | **39** | 110 |
+| `5A12_Ang2_fitness_4ZFG` | `HL` = VH+VL (Fab 5A12) | `A` = Ang2 | **36** | 106 |
+| `5A12_VEGF_fitness_4ZFF` | `HL` = VH+VL (Fab 5A12) | `C` = VEGF | **22** | 98 |
+
+> **与原先「被突变 vs 从不被突变」口径的关系：** 那是一个**数据驱动的代理**。
+> 在本 benchmark 上它恰好给出同一个划分 —— 已 assert，**32/32 条被突变链的界面集合逐位相同**，
+> 所以本文所有数字不受影响。但它在概念上是错的，且会静默失效：
+> **若某个文库只随机化 VH 而不动 VL，VL 会被划成 partner，VH–VL packing 就会被当成结合界面**
+> —— 这正是 D0 那个 bug 的小型版。换数据集必须重新核。
+> 另一个好处：entity 定义下 **4 个 Z-domain assay 不再是特例**（2 条链 ⇒ 划分唯一，不需要退化处理）。
+
+**(c) 距离判据。** 主口径 **D1**：残基 *i* 是 binding-site 残基 ⟺
+*i* 的任一**重原子**到**另一个 entity** 任一重原子的距离 **≤ 5.0 Å**。
+**同一 entity 内部的链间接触（如 VH–VL packing）与链内接触都被排除。**
 
 > 说白了就是「这个残基在 WT 复合物里**有没有和 partner 直接接触**」。5 Å 重原子截断是**接触的几何代理**：
 > 它覆盖 van der Waals 接触、氢键、盐桥的典型距离，但**不度量相互作用强度**，也不含长程静电与去溶剂化。
 > 所以准确的说法是「**是否在结构上直接接触**」，而不是「有没有相互作用」——后者比这个标签能承载的更多。
-> 需要连续量时用 `variant_labels.parquet` 里的 `min_dist_to_partner`。
+> 需要连续量时用 `variant_labels.parquet` 里的 `min_dist_to_partner` —— 列名是沿用早期口径的**历史遗留**，
+> 它的含义就是「到另一个 entity 的最小重原子距离」（数值未变，见 §2b 的回归 gate）。
 
 对照的另外两个定义：
 
@@ -95,11 +114,48 @@ D1 的 cutoff 敏感性（assay 均值 / variant 加权）：
 
 ---
 
+### 多链复合物怎么算：以 `4D5_HER2_1N8Z` 为例
+
+`A` = VL (214 aa)、`B` = VH (220 aa)、`C` = HER2 (607 aa，结构中解析 581)。
+`E1 = {A, B}`（Fab）、`E2 = {C}`（抗原）。所以只算 **A→C** 与 **B→C**，**A↔B 被排除**。
+
+| 被突变链 | → C (HER2) | → 另一条抗体链 | → B∪C（旧口径 D0） |
+|---|---:|---:|---:|
+| `A` (VL) | **10** | 46 | 53 |
+| `B` (VH) | **10** | 48 | 53 |
+| **合计** | **20** | 94 | **106** |
+
+⇒ **D1 给 20 个界面残基，D0 给 106 —— 5.3× 膨胀，几乎全部来自 VH–VL packing**
+（VH–VL 界面比抗体–抗原界面大约 2.4 倍）。这是 §2 那个 bug 在单个 assay 上的样子。
+
+9 个库位点到 HER2 的最小重原子距离：
+
+| 链 | 序列位 | WT | →HER2 (Å) | →另一抗体链 (Å) | D1 |
+|---|---:|:--:|---:|---:|:--:|
+| `A` | 91 / 92 / 93 / 94 | H/Y/T/T | **3.12 / 2.97 / 3.93 / 2.60** | 3.19 / 6.95 / 5.98 / 3.43 | ★★★★ |
+| `A` | 97 | T | 9.36 | 5.77 | · |
+| `B` | 100 / 101 / 102 / 106 | G/G/D/A | 6.36 / 5.36 / **5.0037** / 6.84 | 6.50 / 8.38 / 10.42 / 3.75 | ···· |
+
+- **VL 的 CDR-L3（91–94）全部直接接触 HER2**；**VH 的库位点（CDR-H3 100–102、106）全在表位边缘之外**
+  —— VH 真正接触 HER2 的是 99/103/104/105，库位点被夹在接触残基之间但朝外。`n_lib_pos_site = 4/9` 全来自 VL。
+- **`B102` 是全 benchmark 最脆的边界情形：5.0037 Å**，cutoff 动 0.01 Å 就翻。
+  该 assay 库位点命中数随 cutoff：4.0/4.5/5.0 Å 均为 **4**，6.0 Å 为 **6**（B101、B102 进来），8.0 Å 为 **8**。
+
+### 逐残基的界面标注（两侧、与 mutation 无关）
+
+`data/interface_residues_all_chains.csv` —— **25 assay × 53 条链的全部 9,493 个残基**，
+每行给 `entity / seq_pos / pdb_resid / wt_aa / min_dist_to_other_entity / is_interface_5A`，
+其中 **996 个是界面残基**。它覆盖 partner 侧、以及文库从未碰过的位点 —— 这是数据驱动口径给不出来的，
+做 complexTTT 时要在 WT 复合物上取界面 mask 就用这个文件。
+划分本身在 `data/entity_partition.csv`（含 provenance 与次优划分的余量）。
+
+---
+
 ## 3. 每个 assay 的 binding-sites 范围
 
-### Table A  每个 assay 的 binding-site 残基（D1, heavy-atom <= 5 A to partner）
+### Table A  每个 assay 的 binding-site 残基（D1: heavy-atom ≤ 5 Å to the OTHER entity）
 
-| assay | 被突变链 | partner 链 | binding-site 残基（PDB 编号，逐链） | n_site / L |
+| assay | E1 中被突变的链 | 另一个 entity | binding-site 残基（PDB 编号，逐链） | n_site / L |
 |---|---|---|---|---|
 | 4D5_HER2_fitness_1N8Z | AB | C | `A`: 30-32,49-50,53,91-94<br>`B`: 33,50,52,57-59,99,103-105 | 20/434 |
 | 5A12_Ang2_fitness_4ZFG | HL | A | `H`: 33,35,58,97-99,100A<br>`L`: 27-31,66-68,91-94,96,27A | 21/428 |
@@ -461,6 +517,8 @@ scripts/binding_sites/
   s10_wt.py          提取每个 assay 的 WT 锚点与超越比例
   s11_wt_table.py    生成 Table D
   s12_metric_invariance.py  实测 BindingGYM 全部 metric 对预测的单调变换不变（§7.3 的判据）
+  s13_entity_interface.py   entity 划分（元数据 + 纯结构双路 assert）与逐残基界面标注；
+                            带回归 gate：32/32 条被突变链与旧口径逐位相同
 ```
 
 输入：`/home/guoj0f/share/BindingGYM/input/`（`BindingGYM.csv` + `Binding_substitutions_DMS/` 25 个 csv + `structures/` 22 个 pdb）。

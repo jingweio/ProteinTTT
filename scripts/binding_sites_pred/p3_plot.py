@@ -38,7 +38,7 @@ for ax, dms in zip(axes.ravel(), order):
         ax.hist(np.clip(x, lo, hi), bins=edges, density=True, color=c, alpha=.55,
                 edgecolor=c, linewidth=.35, zorder=2)
         ax.axvline(np.median(x), color=c, lw=1.1, zorder=3)
-    lines = []
+    lines = [(f"Spearman($\\rho$) = {s.rho_mpnn_vs_dms:.3f}", "#0F4D92")]   # the assay's benchmark metric
     if s.testable:
         # colour the delta by whether it agrees in sign with the DMS delta
         agree = np.sign(s.cliffs_delta_mpnn) == np.sign(s.cliffs_delta_dms)
@@ -52,12 +52,12 @@ for ax, dms in zip(axes.ravel(), order):
     lines.append((f"touches   n={int(s.n_iface):,}", C_IFACE))
     lines.append((f"does not  n={int(s.n_noniface):,}", C_NON))
     for k, (t, c) in enumerate(lines):
-        ax.text(.975, .965 - k * .088, t, transform=ax.transAxes, ha="right", va="top",
+        ax.text(.975, .965 - k * .080, t, transform=ax.transAxes, ha="right", va="top",
                 fontsize=6.2, color=c, zorder=4)
     ax.set_title(SHORT[dms], fontsize=8, pad=3, color="black" if s.testable else "#767676")
     ax.set_yticks([]); ax.spines["left"].set_visible(False)
     ax.tick_params(axis="x", labelsize=6.5, pad=1.5)
-    ax.set_xlim(lo, hi); ax.margins(y=.60)
+    ax.set_xlim(lo, hi); ax.margins(y=.72)
 for ax in axes.ravel()[len(order):]:
     ax.axis("off")
 

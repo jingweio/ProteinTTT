@@ -10,7 +10,7 @@
 |---|---|
 | 43% 这个数**算得对吗**？ | **对**。在原口径（D0）下，25 个 assay 的 `frac_no_iface` **未加权均值 = 0.4295**，我独立重算得 **0.429504**，25/25 逐 assay 吻合。 |
 | 它**是不是**「43% 的 mutants」？ | **不是**。它是 **assay 未加权均值**；按 variant 加权是 **39.7%**（149,368 / 376,424）。而且它不描述任何一个 assay —— 分布双峰：**9/25 ≤ 0.001、11/25 ≥ 0.61**，中间只有 5 个（0.127–0.540）。 |
-| 界面定义**站得住吗**？ | 现在的定义是 **entity-based、与 mutation 无关**（§2b，元数据 + 纯结构双路验证）。**原定义有 bug**：它把「到结构里**任意其它链**的距离 < 5 Å」当作界面，于是抗体的 **VH–VL packing 也被算成结合界面**。改成「到该 assay 中**从不被突变的 partner 链**」后，assay 均值变成 **0.4697**，variant 加权 **0.4764**。 |
+| 界面定义**站得住吗**？ | 现在的定义是 **entity-based、与 mutation 无关**，划分由**元数据**定（§2b）。**原定义有 bug**：它把「到结构里**任意其它链**的距离 < 5 Å」当作界面，于是抗体的 **VH–VL packing 也被算成结合界面**。改成「到该 assay 中**从不被突变的 partner 链**」后，assay 均值变成 **0.4697**，variant 加权 **0.4764**。 |
 | 这 43% 的 variant 是不是「没信号」？ | **不是**。碰界面的 variant 确实显著更差（16 个可检验 assay 里 15 个 q<0.05、方向全部一致），但**效应量很小**：**OVL 中位 0.697**（两组分布约 70% 重叠）、**P(不碰>碰) 中位 0.627**、**η² 中位 0.051**；不碰界面那一组仍保留全 assay **95%** 的 IQR。见 §5 Figure 1。 |
 | **WT 的 DMS_score 能用于 TTT 吗？** | **不能**（§7）。zero-shot 侧完全不接触 label；`intra_*` 微调会见到（但同 assay ~80% 的 label 都见到了），`inter_cluster` 不会。用于 TTT 的收益**上界是 0** —— BindingGYM 的每个 metric 都对预测的单调变换不变（已实测），而 WT 锚点只是一个 per-assay 标量。 |
 | **多少分算比 WT 好？** | 22/25 个 assay 带一行 WT 作为锚点，但 WT 的位置从 0.0% 分位跨到 100% 分位。15 个 assay 锚点 ≈ 0（**score > 0 即优于 WT**），7 个是具体数字（查 §6 Table D），**3 个没有 WT 行、无法判断**。超越 WT 是少数事件（正常 assay 2.9%–35%）。 |
@@ -43,21 +43,31 @@ BindingGYM **不提供**界面标注，必须自己从结构算。三个要素�
 没有逐 variant 结构，所以界面是**在野生型坐标上一次算定**、所有 variant 共用。
 
 **(b) 两个 binding entity 是谁。** 关键的一步，也是原口径出错的地方。
-**界面是复合物的性质，不是文库的性质** —— 所以这一步**不看 mutation 数据**：先把复合物的链
-划分成两个 binding entity `E1` / `E2`，两条互相独立的、都与 mutation 无关的路子：
+**界面是复合物的性质，不是文库的性质** —— 所以这一步**不看 mutation 数据**，
+而是把链划分成两个 binding entity `E1` / `E2`。
 
-1. **元数据**：`DMS_id` 本身就写着两个 partner（`4D5_HER2` = Fab 4D5 vs HER2）。
-   只有 3 个 assay 有 >2 条链需要指定链归属（见下表），2 条链的复合物划分是**唯一确定**的。
-2. **纯结构**：枚举链的所有 2-划分，取**跨划分接触最小**的那个。对 Fab 这会正确地切在
-   Fab↔抗原之间，因为 **VH–VL 界面远大于 paratope–epitope 界面**。
+**唯一权威是元数据**：`DMS_id` 本身就写着两个 partner（`4D5_HER2` = Fab 4D5 vs HER2）。
 
-两条路子在 3 个多链 assay 上**全部一致，且余量很大**（脚本 `s13_entity_interface.py` 里是 assert）：
+| assay | E1 | E2 | 划分来源 | 跨界面残基 |
+|---|---|---|---|---:|
+| `4D5_HER2_fitness_1N8Z` | `AB` = VL+VH (Fab 4D5) | `C` = HER2 | curated from DMS_id | 39 |
+| `5A12_Ang2_fitness_4ZFG` | `HL` = VH+VL (Fab 5A12) | `A` = Ang2 | curated from DMS_id | 36 |
+| `5A12_VEGF_fitness_4ZFF` | `HL` = VH+VL (Fab 5A12) | `C` = VEGF | curated from DMS_id | 22 |
+| *其余 22 个* | — | — | **由链数强制**（2 条链只有一种划分） | 19 – 84 |
 
-| assay | E1 | E2 | 选中划分的跨界面残基 | 次优划分 |
-|---|---|---|---:|---:|
-| `4D5_HER2_fitness_1N8Z` | `AB` = VL+VH (Fab 4D5) | `C` = HER2 | **39** | 110 |
-| `5A12_Ang2_fitness_4ZFG` | `HL` = VH+VL (Fab 5A12) | `A` = Ang2 | **36** | 106 |
-| `5A12_VEGF_fitness_4ZFF` | `HL` = VH+VL (Fab 5A12) | `C` = VEGF | **22** | 98 |
+**只有 3 个 assay 需要人工指定链归属**，其余 22 个是 2 条链、划分唯一确定，**没有任何可出错的余地**。
+
+> **为什么不用「纯结构」来定划分。** 有一个看起来很漂亮的启发式：枚举所有 2-划分、取跨划分接触
+> 最小的那个。它在这 3 个 assay 上确实给出同一答案且余量很大（39 vs 110、36 vs 106、22 vs 98），
+> 但它**只是启发式** —— 它假设「被测界面比任何 entity 内部界面都小」。这对 Fab 成立
+> （VH–VL 远大于 paratope–epitope），但只要某个 entity 自己的链之间接触很弱、
+> 或被测界面恰好是复合物里最大的那个，它就会把切口划进 entity 内部。
+> **更要紧的是：拿它去 assert curated 表是有害的** —— 一旦启发式错而 curation 对，
+> 它会把正确的分析拦下来。所以现在它只**报告**（`entity_partition.csv` 的 `diag_*` 列，
+> 当前 3/3 一致），**不参与决策、也不 gate**。
+>
+> **真正被 assert 的是「curation 对时不可能失败」的那几条**：每条链恰好被分配一次、
+> 两个 entity 都非空、curated 的链 id 在结构里存在、两个 entity 之间确实有接触。
 
 > **与原先「被突变 vs 从不被突变」口径的关系：** 那是一个**数据驱动的代理**。
 > 在本 benchmark 上它恰好给出同一个划分 —— 已 assert，**32/32 条被突变链的界面集合逐位相同**，
@@ -147,7 +157,7 @@ D1 的 cutoff 敏感性（assay 均值 / variant 加权）：
 每行给 `entity / seq_pos / pdb_resid / wt_aa / min_dist_to_other_entity / is_interface_5A`，
 其中 **996 个是界面残基**。它覆盖 partner 侧、以及文库从未碰过的位点 —— 这是数据驱动口径给不出来的，
 做 complexTTT 时要在 WT 复合物上取界面 mask 就用这个文件。
-划分本身在 `data/entity_partition.csv`（含 provenance 与次优划分的余量）。
+划分本身在 `data/entity_partition.csv`（含 provenance；`diag_*` 列是结构启发式的诊断，不参与决策）。
 
 ---
 
@@ -517,8 +527,8 @@ scripts/binding_sites/
   s10_wt.py          提取每个 assay 的 WT 锚点与超越比例
   s11_wt_table.py    生成 Table D
   s12_metric_invariance.py  实测 BindingGYM 全部 metric 对预测的单调变换不变（§7.3 的判据）
-  s13_entity_interface.py   entity 划分（元数据 + 纯结构双路 assert）与逐残基界面标注；
-                            带回归 gate：32/32 条被突变链与旧口径逐位相同
+  s13_entity_interface.py   entity 划分（**元数据唯一权威**；纯结构启发式只报告不 gate）
+                            与逐残基界面标注；带回归 gate：32/32 条被突变链与旧口径逐位相同
 ```
 
 输入：`/home/guoj0f/share/BindingGYM/input/`（`BindingGYM.csv` + `Binding_substitutions_DMS/` 25 个 csv + `structures/` 22 个 pdb）。

@@ -6,14 +6,22 @@ benchmark, but it is a property of the library, not of the complex, and it would
 silently mislabel an intra-entity interface (e.g. VH-VL packing) as a binding
 interface if a library mutated only one chain of a two-chain entity.
 
-Here the two entities are fixed per complex, mutation-free, by two independent routes:
-  (1) metadata  -- the DMS_id names the two binding partners ("4D5_HER2" = 4D5 vs HER2).
-                   Only the 3 three-chain assays need a chain assignment; for a
-                   two-chain complex the partition is forced.
-  (2) structure -- among all 2-partitions of the chains, the one with the SMALLEST
-                   inter-partition contact. For a Fab this correctly cuts between the
-                   Fab and the antigen, because the VH-VL interface is far larger than
-                   the paratope-epitope one. Heuristic, and asserted against (1).
+The partition here comes from METADATA ONLY, which is authoritative: the DMS_id names
+the two binding partners ("4D5_HER2" = Fab 4D5 vs HER2). Only the three >2-chain assays
+need a chain assignment (CURATED below); for a two-chain complex the partition is
+forced by the chain count, so nothing is curated and nothing can go wrong.
+
+A structural heuristic -- of all 2-partitions, the one with the smallest inter-partition
+contact -- is REPORTED as a diagnostic but deliberately NOT used to decide or to gate.
+It is only a heuristic: it assumes the assayed interface is smaller than every
+intra-entity interface, which holds for a Fab (VH-VL >> paratope-epitope) but fails
+whenever an entity's own chains barely touch, or when the assayed interface is the
+largest one in the complex. Asserting against it would let a wrong heuristic block a
+correct curation, so it warns instead of failing.
+
+What IS asserted are checks that cannot be wrong when the curation is right: every
+chain assigned exactly once, both entities non-empty, every curated chain present in
+the structure, and the two entities actually in contact.
 
 Output covers EVERY residue of EVERY chain -- both entities, and positions the library
 never touches -- which the mutation-driven version could not provide.
@@ -56,23 +64,37 @@ for _, r in idx.iterrows():
     dms, ws = r["DMS_id"], parse_mut_dict(r["wildtype_sequence"])
     pdb = parse_pdb(os.path.join(PDB_DIR, r["pdb_file"]))
     chains = sorted(ws)
-    n_struct, sE1, sE2 = min_contact_partition(pdb, chains)
+    # ---- the partition: metadata only ----
     if dms in CURATED:
-        cE1, cE2 = CURATED[dms]
-        assert {frozenset(cE1), frozenset(cE2)} == {frozenset(sE1), frozenset(sE2)}, \
-            f"{dms}: curated {cE1}|{cE2} != structural {sE1}|{sE2}"
-        E1, E2, prov = cE1, cE2, "curated + structural agree"
+        E1, E2 = CURATED[dms]; prov = "curated from DMS_id"
     else:
-        E1, E2, prov = sE1, sE2, "forced (2 chains)"
-    # second-best partition, to record how safe the structural call was
+        assert len(chains) == 2, f"{dms}: {len(chains)} chains but no curated partition"
+        E1, E2 = {chains[0]}, {chains[1]}; prov = "forced (2 chains)"
+    # ---- checks that cannot be wrong when the curation is right ----
+    assert E1 and E2, f"{dms}: empty entity"
+    assert E1.isdisjoint(E2) and E1 | E2 == set(chains), f"{dms}: {E1}|{E2} != {chains}"
+    for c in E1 | E2:
+        assert c in pdb, f"{dms}: curated chain {c} absent from {r['pdb_file']}"
+    n_iface = contact_count(pdb, E1, E2)
+    assert n_iface > 0, f"{dms}: the two entities do not contact each other"
+    # ---- structural heuristic: reported, never decisive ----
+    n_struct, sE1, sE2 = min_contact_partition(pdb, chains)
+    agrees = {frozenset(sE1), frozenset(sE2)} == {frozenset(E1), frozenset(E2)}
+    if not agrees:
+        print(f"  NOTE {dms}: min-contact heuristic would pick "
+              f"{{{''.join(sorted(sE1))}}}|{{{''.join(sorted(sE2))}}} ({n_struct}) "
+              f"instead of the curated {{{''.join(sorted(E1))}}}|{{{''.join(sorted(E2))}}} "
+              f"({n_iface}); the curation wins.")
+    # runner-up partition, recorded as a diagnostic only
     alts = [contact_count(pdb, set(g), set(chains) - set(g))
             for k in range(1, len(chains)) for g in itertools.combinations(chains, k)
             if min(set(g)) <= min(set(chains) - set(g))
             and {frozenset(g), frozenset(set(chains) - set(g))} != {frozenset(E1), frozenset(E2)}]
     part_rows.append(dict(DMS_id=dms, pdb=r["pdb_file"], n_chains=len(chains),
                           entity1="".join(sorted(E1)), entity2="".join(sorted(E2)),
-                          provenance=prov, contact_chosen=n_struct,
-                          contact_next_best=min(alts) if alts else np.nan))
+                          provenance=prov, n_interface_res=n_iface,
+                          diag_next_best_contact=min(alts) if alts else np.nan,
+                          diag_heuristic_agrees=agrees if len(chains) > 2 else np.nan))
     # every residue of every chain, distance to the OTHER entity
     for side, other in ((E1, E2), (E2, E1)):
         t = cKDTree(np.vstack([np.vstack(pdb[c]["coords"]) for c in other]))
@@ -93,6 +115,10 @@ P.to_csv(f"{OUT_DIR}/entity_partition.csv", index=False)
 R.to_csv(f"{OUT_DIR}/interface_residues_all_chains.csv", index=False)
 pd.set_option("display.width", 250)
 print(P.to_string(index=False))
+mc = P[P.n_chains > 2]
+print(f"\ncurated partitions: {len(mc)} (all >2-chain assays); forced by chain count: {len(P) - len(mc)}")
+print(f"diagnostic -- min-contact heuristic agrees with the curation on {int(mc.diag_heuristic_agrees.sum())}"
+      f"/{len(mc)} (not used to decide, not asserted)")
 print(f"\nper-residue rows: {len(R):,}  ({R.is_interface_5A.sum():,} interface)  "
       f"assays {R.DMS_id.nunique()}  chains {len(R.groupby(['DMS_id','chain']))}")
 

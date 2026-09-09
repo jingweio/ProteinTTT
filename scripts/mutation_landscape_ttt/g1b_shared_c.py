@@ -11,7 +11,8 @@ import numpy as np, pandas as pd
 from scipy import stats
 
 REC = "/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records"
-OUT = f"{REC}/mutation-landscape-TTT/data"
+WSREC = REC.replace("local-records", "workstation-records")
+OUT = f"{WSREC}/mutation-landscape-TTT/data"
 EXCLUDE = ["KRAS_DARPinK27_norfitness_5O2S", "KRAS_SOS1_norfitness_8BE4"]
 GRID = np.linspace(-4, 4, 161)                      # c in units of the assay's score sd
 

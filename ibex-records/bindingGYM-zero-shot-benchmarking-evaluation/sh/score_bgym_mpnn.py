@@ -126,8 +126,15 @@ def main():
 
     for (POI, chain_ids), g in df.groupby(["POI", "chain_id"], sort=False):
         pdb = os.path.join(a.structure_folder, g["pdb_file"].values[0])
+        # 🔴 parse_atoms_with_zero_occupancy=True 是必须的,且是【口径正确】的选择:
+        #    BindingGYM 全部 22 个结构的 occupancy 都是 0.00(多为同源模型 *_hm.pdb),
+        #    LigandMPNN 默认会 select("occupancy > 0") ⇒ 选中 0 个原子、返回 None 再崩溃。
+        #    而官方 BindingGYM 的 parse_PDB 根本不看 occupancy ⇒ anchor 那轮用的是全部原子。
+        #    置 True 才与 anchor 逐原子一致。
         pdict, _, _, icodes, _ = parse_PDB(pdb, device=dev,
-                                           parse_all_atoms=bool(a.use_side_chain_context))
+                                           parse_all_atoms=bool(a.use_side_chain_context),
+                                           parse_atoms_with_zero_occupancy=True)
+        assert pdict is not None and pdict["mask"].numel() > 0, f"{DMS_id}: parse_PDB 返回空"
         letters = np.array([str(c) for c in pdict["chain_letters"]])
         L = len(letters)
         designed = [c for c in str(chain_ids)] if str(chain_ids) else sorted(set(letters))

@@ -198,6 +198,9 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 - 2026-09-11 23:40 · 更正 §8 的排队判断：我方 FairShare 仅 0.0997，2h/a100 被排到 +21h。
   建 env 改走 CPU-only(立刻 RUNNING)；GPU 只留给真正要 GPU 的打分。
 - 2026-09-11 23:45 · 冻结 chain partition(P4 阻塞项解除)；提交 P1 smoke(job 51753075, 依赖 51752817)。
+- 2026-09-12 00:1x · smoke 三轮修复:setuptools<81 补 pkg_resources;heredoc 变量展开 bug;
+  失败传播(坏 job 曾伪装成 COMPLETED);parse_atoms_with_zero_occupancy=True(BindingGYM 结构 occ 全为 0,
+  且官方管线本就不按 occupancy 过滤 ⇒ 置 True 才与 anchor 一致)。
   据 LigandMPNN 源码修正口径 B 的实现为 joint_masked_score（1 pass/位点组合，而非 single_aa_score 的 L 次/次调用）。
 
 ## 12. Results
@@ -260,3 +263,34 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 
 **smoke assay 选取**：`Z-domain_ZpA963_HL2_2M5A`(600, L=116)、`BH3_Mcl-1_3KZ0`(518, L=173)、
 `PSD95_CRIPT_1BE9`(1577, L=120) —— 都小且快，1h walltime 足够，排队也最快。
+
+## 15. P1 smoke 的三轮失败与修复（2026-09-11 23:5x ~ 00:1x）
+
+smoke 连挂三次，每次都暴露一个会毒害正式结果的问题，值得逐条记下。
+
+**#1（job 51753075，9 s，却报 COMPLETED）**
+- `ModuleNotFoundError: pkg_resources` —— ProDy 依赖它，新版 setuptools 已移除；**三个新 env 全中**。
+  修：三个 env 各装 `setuptools<81`（→ 80.10.2，ProDy 2.4.1/2.6.1 均可 import）。
+- `FileNotFoundError: '/input/BindingGYM.csv'` —— sbatch 外层用了**未加引号**的 heredoc，
+  内层 python 里的 `$BG`/`$OUT`/`$R` 在**写文件时**就被本地 shell 展开成空串。
+  修：内层 python 抽成独立文件（`smoke_indices.py` / `compare_to_anchor.py`），参数全走 argv。
+- ⚠️ **最该记的一条**：脚本用 `set -uo pipefail`（没有 `-e`），**失败的 job 报成 `COMPLETED`**。
+  修：显式 `FAIL` 标志 + `exit $FAIL`，且 `compare_to_anchor.py` 在 `rho ≤ 0.95` 时 `exit 1`。
+  不修的话，后续每个失败 job 都会显示成功，要等几小时拿到空结果才发现。
+
+**#2（job 51753682，19 s，正确地 FAILED）** —— 失败传播已生效。
+- `AttributeError: 'NoneType' object has no attribute 'select'`，出在
+  LigandMPNN `data_utils.py:780` 的 `atoms = atoms.select("occupancy > 0")`。
+- 根因：**BindingGYM 全部 22 个结构的 occupancy 都是 0.00**（多为同源模型 `*_hm.pdb`）
+  ⇒ 该 select 选中 0 个原子、返回 `None`，下一个 `.select` 即崩。
+- 修：`parse_atoms_with_zero_occupancy=True`。**这不是绕过，而是口径正确的选择** ——
+  官方 BindingGYM 的 `parse_PDB` 根本不看 occupancy，anchor 那轮用的就是全部原子；
+  置 True 才与 anchor 逐原子一致。
+- 幸运之处：它是**崩溃**而非静默返回子集。否则我们会在残缺结构上打分而毫无察觉。
+  已额外加 `assert pdict is not None and pdict["mask"].numel() > 0`。
+
+**#3（job 51753901）** —— 结果见 §12。
+
+> 通用教训：**沿用一个 vendor 的 `parse_PDB` 时，它的默认过滤条件可能与 benchmark 的
+> 官方管线不同。** 这里 LigandMPNN 与 BindingGYM 在 occupancy 上的默认行为就不一致，
+> 而 BindingGYM 的结构恰好落在分歧点上。

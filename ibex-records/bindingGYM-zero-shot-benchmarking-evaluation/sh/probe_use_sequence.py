@@ -29,7 +29,9 @@ m = ProteinMPNN(node_features=128, edge_features=128, hidden_dim=128,
                 model_type="protein_mpnn", ligand_mpnn_use_side_chain_context=0)
 m.load_state_dict(ck["model_state_dict"]); m.to(dev).eval()
 
-pd_, _, _, _, _ = parse_PDB(a.pdb, device=dev, parse_all_atoms=False)
+pd_, _, _, _, _ = parse_PDB(a.pdb, device=dev, parse_all_atoms=False,
+                            parse_atoms_with_zero_occupancy=True)  # BindingGYM 结构 occ 全为 0
+assert pd_ is not None, "parse_PDB 返回 None"
 pd_["chain_mask"] = torch.ones_like(pd_["mask"])
 fd = featurize(pd_, model_type="protein_mpnn")
 fd["batch_size"] = 1

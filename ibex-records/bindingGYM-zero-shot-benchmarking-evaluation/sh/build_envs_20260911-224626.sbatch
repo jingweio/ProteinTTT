@@ -18,7 +18,15 @@ nvidia-smi | grep -E 'Driver Version|CUDA Version'
 
 mk(){  # mk <env> <py> <pip-cmds...>
   local E=$1 PY=$2; shift 2
-  if conda env list | grep -q "^$E "; then echo "[OK] $E 已存在,跳过"; return 0; fi
+  # 🔴 验包不验名:login node 的 reaper 在 pip 阶段 Kill 会留下 site-packages 为空的 env 壳,
+  #    只查 env 名会把半成品当成已建好而跳过(2026-09-11 实测 lasermpnn-bgym pkgs=0)。
+  if conda env list | grep -q "^$E "; then
+    if $CB/envs/$E/bin/python -c "import torch" 2>/dev/null; then
+      echo "[OK] $E 已存在且可用,跳过"; return 0
+    fi
+    echo "[WARN] $E 是半成品(torch 无法 import),移除重建"
+    conda env remove -n $E -y >/dev/null 2>&1
+  fi
   conda create -y -n $E python=$PY || { echo "[FAIL] $E create"; return 1; }
   conda activate $E || return 1
   local rc=0

@@ -136,6 +136,7 @@ def main():
                                            parse_atoms_with_zero_occupancy=True)
         assert pdict is not None and pdict["mask"].numel() > 0, f"{DMS_id}: parse_PDB 返回空"
         letters = np.array([str(c) for c in pdict["chain_letters"]])
+        R_idx = pdict["R_idx"].cpu().numpy().astype(int)   # PDB 残基编号
         L = len(letters)
         designed = [c for c in str(chain_ids)] if str(chain_ids) else sorted(set(letters))
         pdict["chain_mask"] = torch.tensor(
@@ -145,17 +146,29 @@ def main():
                        number_of_ligand_atoms=atom_ctx, model_type=a.model_type)
         fd["batch_size"] = M; fd["symmetry_residues"] = [[]]
 
-        # 🔴 硬校验：结构解析出的 WT 必须与 BindingGYM 的 wildtype_sequence 逐位一致
+        # 🔴 两个 parser 的残基集合不同,必须显式补洞:
+        #    BindingGYM 的 wildtype_sequence 按【残基编号跨度】索引;官方 ProteinMPNN 的
+        #    parse_PDB 会按编号补洞(缺失位 mask=0,对 _scores 贡献为 0);而 LigandMPNN 的
+        #    parse_PDB 只返回【观测到的】残基。
+        #    实例 3KZ0 链A:观测 143 个、编号 172..321(跨度 150,缺 196-202),BindingGYM 序列长 150。
+        #    ⇒ 按 (chain, 编号-该链最小编号) 建映射;未观测位不参与打分,与 anchor 的 mask=0 等价。
         wt_ref = ast.literal_eval(row["wildtype_sequence"])
         struct_seq = "".join(alphabet[int(i)] for i in fd["S"][0].cpu().numpy())
-        ch_pos = {c: np.where(letters == c)[0] for c in set(letters)}
+        pos_map = {}                  # chain -> {BindingGYM 序列位(0-based): featurize 下标}
         for c in designed:
-            assert c in ch_pos, f"{DMS_id}: 结构里没有链 {c}"
-            got = "".join(struct_seq[p] for p in ch_pos[c])
-            ref = wt_ref[c]
-            assert len(got) == len(ref), f"{DMS_id} 链{c}: 长度 {len(got)} vs BindingGYM {len(ref)}"
-            bad = [(k, got[k], ref[k]) for k in range(len(ref)) if got[k] != ref[k] and got[k] != "X"]
-            assert not bad, f"{DMS_id} 链{c}: WT 不符，前 3 处 {bad[:3]}"
+            sel = np.where(letters == c)[0]
+            assert len(sel) > 0, f"{DMS_id}: 结构里没有链 {c}"
+            rn = R_idx[sel]; lo, hi = int(rn.min()), int(rn.max())
+            span, nref = hi - lo + 1, len(wt_ref[c])
+            assert span == nref, (f"{DMS_id} 链{c}: 残基编号跨度 {span} ({lo}..{hi}) "
+                                  f"!= BindingGYM 序列长 {nref}")
+            pos_map[c] = {int(r) - lo: int(p) for r, p in zip(rn, sel)}
+            if len(sel) != nref:
+                print(f"  [gap] {DMS_id} 链{c}: 观测 {len(sel)}/{nref}, "
+                      f"缺 {nref - len(sel)} 个(不参与打分,与 anchor 的 mask=0 一致)")
+            bad = [(k, struct_seq[p], wt_ref[c][k]) for k, p in pos_map[c].items()
+                   if struct_seq[p] != wt_ref[c][k] and struct_seq[p] != "X"]
+            assert not bad, f"{DMS_id} 链{c}: WT 不符,前 3 处 {bad[:3]}"
 
         gen = torch.Generator(device=dev).manual_seed(a.seed)
         randn = torch.randn([M, L], device=dev, generator=gen)   # 每个 POI 一次，组内共享
@@ -167,8 +180,10 @@ def main():
             mseq = ast.literal_eval(g.loc[i, "mutated_sequence"])
             S = S_wt.clone()
             for c in designed:
-                tok = torch.tensor([restype_str_to_int[x] for x in mseq[c]], device=dev)
-                S[0, ch_pos[c]] = tok
+                seqc = mseq[c]; ks = sorted(pos_map[c])
+                tok = torch.tensor([restype_str_to_int[seqc[k]] for k in ks],
+                                   device=dev, dtype=S.dtype)   # dtype 必须与 S 一致(int32)
+                S[0, [pos_map[c][k] for k in ks]] = tok
             fd["S"] = S
 
             if a.protocol == "ar":

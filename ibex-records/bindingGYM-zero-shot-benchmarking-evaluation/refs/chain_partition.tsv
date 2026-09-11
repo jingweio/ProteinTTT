@@ -1,0 +1,32 @@
+# BindingGYM 25 assay 的 StaB-ddG binding partition (binder1_binder2)
+# 生成: derive_chain_partition.py, 接触判据=任意重原子 <5.0A
+# 规则: 2 链 -> 平凡; 3 链 -> 接触数最大的一对为 binder1, 余者为 binder2
+#   (三个三链 assay 的结果与 assay 名语义独立吻合: 4D5_HER2->AB_C, 5A12_Ang2->HL_A, 5A12_VEGF->HL_C)
+# env: python 3.10.20 numpy 2.2.6 pandas 2.3.0
+# FINGERPRINT_md5(body) = 068dae9cc3338368f0e89ebe39e752f4
+DMS_id	pdb	chains	binder1	binder2	stabddg_chains	lens	contacts	rule
+4D5_HER2_fitness_1N8Z	1N8Z_hm.pdb	ABC	AB	C	AB_C	A:214,B:220,C:607	A-B:942 B-C:245 A-C:172	max-contact pair A-B:942
+5A12_Ang2_fitness_4ZFG	4ZFG.pdb	AHL	HL	A	HL_A	A:220,H:219,L:213	H-L:858 A-L:253 A-H:93	max-contact pair H-L:858
+5A12_VEGF_fitness_4ZFF	4ZFF_CHL.pdb	CHL	HL	C	HL_C	C:96,H:219,L:213	H-L:912 C-H:246 C-L:15	max-contact pair H-L:912
+Z-domain_ZpA963_HL1_fitness_2M5A	2M5A.pdb	AB	A	B	A_B	A:58,B:58	A-B:493	two-chain(平凡)
+Z-domain_ZpA963_HL2_fitness_2M5A	2M5A.pdb	AB	A	B	A_B	A:58,B:58	A-B:493	two-chain(平凡)
+Z-domain_ZSPA-1_LL1_fitness_1LP1	1LP1.pdb	AB	A	B	A_B	A:55,B:54	A-B:533	two-chain(平凡)
+Z-domain_ZSPA-1_LL2_fitness_1LP1	1LP1.pdb	AB	A	B	A_B	A:55,B:54	A-B:533	two-chain(平凡)
+CXCR4_CXCL12_enrich_8U4O	8U4O_hm.pdb	JR	J	R	J_R	J:65,R:295	J-R:521	two-chain(平凡)
+hYAP65_peptide_FunctioncalScore_1JMQ	1JMQ_hm.pdb	AP	A	P	A_P	A:46,P:10	A-P:254	two-chain(平凡)
+GB1_IgG-Fc_fitness_1FCC	1FCC_hm.pdb	AC	A	C	A_C	A:206,C:56	A-C:368	two-chain(平凡)
+GB1_IgG-Fc_fitness_1FCC_2016	1FCC2016_hm.pdb	AC	A	C	A_C	A:206,C:56	A-C:411	two-chain(平凡)
+SARS2-RBD_ACE2_deltaKd_6M0J	6M0J.pdb	AE	A	E	A_E	A:597,E:194	A-E:505	two-chain(平凡)
+KRAS_DARPinK27_norfitness_5O2S	5O2S_hm.pdb	AB	A	B	A_B	A:165,B:156	A-B:490	two-chain(平凡)
+KRAS_PICK3CG-RBD_norfitness_1HE8	1HE8_hm.pdb	AB	A	B	A_B	A:941,B:166	A-B:304	two-chain(平凡)
+KRAS_RAF1_norfitness_6VJJ	6VJJ.pdb	AB	A	B	A_B	A:168,B:77	A-B:387	two-chain(平凡)
+KRAS_RAF1-RBD_norfitness_6VJJ	6VJJ.pdb	AB	A	B	A_B	A:168,B:77	A-B:387	two-chain(平凡)
+KRAS_RALGDS-RBD_norfitness_1LFD	1LFD_hm.pdb	AB	A	B	A_B	A:87,B:167	A-B:341	two-chain(平凡)
+KRAS_SOS1_norfitness_8BE4	8BE4_hm.pdb	RS	R	S	R_S	R:168,S:475	R-S:869	two-chain(平凡)
+BH3_Mcl-1_normed_3KZ0	3KZ0_hm.pdb	AC	A	C	A_C	A:150,C:23	A-C:650	two-chain(平凡)
+BH3_Bcl-xL_normed_1PQ1	1PQ1_hm.pdb	AB	A	B	A_B	A:196,B:33	A-B:627	two-chain(平凡)
+HLA-A2_TAPBPR_meanscore_5WER	5WER_hm.pdb	AC	A	C	A_C	A:274,C:370	A-C:505	two-chain(平凡)
+PSD95_CRIPT_1BE9	1BE9_hm.pdb	AB	A	B	A_B	A:115,B:5	A-B:281	two-chain(平凡)
+PSD95_Tm2F_1BE9	1BE9Tm2F_hm.pdb	AB	A	B	A_B	A:115,B:5	A-B:286	two-chain(平凡)
+ACE2_SARS2-RBD_enrich_6M17	6M17_BE.pdb	BE	B	E	B_E	B:748,E:183	B-E:385	two-chain(平凡)
+CD19_FMC63_Fitness_7URV	7URV_hm.pdb	CD	C	D	C_D	C:255,D:242	C-D:511	two-chain(平凡)

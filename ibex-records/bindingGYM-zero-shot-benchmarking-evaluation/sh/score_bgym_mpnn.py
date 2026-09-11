@@ -24,8 +24,10 @@ import numpy as np, pandas as pd, torch
 def _scores(S, log_probs, mask):
     """逐字复刻官方 protein_mpnn_utils._scores —— 注意长度归一是【注释掉】的。"""
     crit = torch.nn.NLLLoss(reduction="none")
+    # NLLLoss 的 target 必须是 int64。LigandMPNN 的 featurize 产出 int32,
+    # 而官方 tied_featurize 产出 int64 —— 这里显式 .long() 对齐,不改变数值语义。
     loss = crit(log_probs.contiguous().view(-1, log_probs.size(-1)),
-                S.contiguous().view(-1)).view(S.size())
+                S.long().contiguous().view(-1)).view(S.size())
     return torch.sum(loss * mask, dim=-1)          # 不除以 mask.sum()
 
 
@@ -45,8 +47,13 @@ def joint_masked_logprobs(model, fd, pos_idx):
 
     h_V_enc, h_E_enc, E_idx_enc = model.encode(fd)
 
-    order_mask = torch.ones(L, device=dev).float()
-    order_mask[pos_idx] = 0.0
+    # 🔴 方向由 probe_use_sequence.py 实测定案(2026-09-12),不是推理:
+    #    order_mask=1 的位点得到 ~|randn|(大) ⇒ 解码序【靠后】⇒ 能看到先解码的位点 = 条件于其余序列
+    #    order_mask=0 的位点得到 ~1e-4|randn|(小) ⇒ 解码序【靠前】⇒ 看不到任何序列 = backbone-only
+    #    我们要的是「mask 掉这组位点、条件于其余全部」⇒ 这组位点必须【最后】解码 ⇒ 置 1,其余置 0。
+    #    (先前写反了:若按 ones/pos_idx=0,得到的是 backbone-only 分数,而非口径 B。)
+    order_mask = torch.zeros(L, device=dev).float()
+    order_mask[pos_idx] = 1.0
     decoding_order = torch.argsort((order_mask + 0.0001) * torch.abs(randn))
 
     E_idx = E_idx_enc.repeat(B, 1, 1)

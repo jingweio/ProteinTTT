@@ -109,7 +109,8 @@ def main():
             else:
                 key = tuple(diff)
                 if key not in cache:
-                    om = torch.ones(L, device=model.device); om[diff] = 0.0   # 整组突变位点排到最前
+                    # 方向同 score_bgym_mpnn(probe 实测):要条件于其余序列,这组位点须【最后】解码
+                    om = torch.zeros(L, device=model.device); om[diff] = 1.0
                     acc = None
                     for m in range(a.num_decoding_orders):
                         dorder = torch.argsort((om + 1e-4) * torch.abs(randn[m]))

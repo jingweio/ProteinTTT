@@ -199,6 +199,8 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
   建 env 改走 CPU-only(立刻 RUNNING)；GPU 只留给真正要 GPU 的打分。
 - 2026-09-11 23:45 · 冻结 chain partition(P4 阻塞项解除)；提交 P1 smoke(job 51753075, 依赖 51752817)。
 - 2026-09-12 00:1x · smoke 三轮修复:setuptools<81 补 pkg_resources;heredoc 变量展开 bug;
+- 2026-09-12 00:4x · smoke #5 gate 通过(两个 assay rho=1.0000 逐位复现 anchor)。
+  探针纠正了 joint_masked 的解码序方向(原写法得到的是 backbone-only)。P1 五个 config 已提交。
   失败传播(坏 job 曾伪装成 COMPLETED);parse_atoms_with_zero_occupancy=True(BindingGYM 结构 occ 全为 0,
   且官方管线本就不按 occupancy 过滤 ⇒ 置 True 才与 anchor 一致)。
   据 LigandMPNN 源码修正口径 B 的实现为 joint_masked_score（1 pass/位点组合，而非 single_aa_score 的 L 次/次调用）。
@@ -289,8 +291,66 @@ smoke 连挂三次，每次都暴露一个会毒害正式结果的问题，值�
 - 幸运之处：它是**崩溃**而非静默返回子集。否则我们会在残缺结构上打分而毫无察觉。
   已额外加 `assert pdict is not None and pdict["mask"].numel() > 0`。
 
-**#3（job 51753901）** —— 结果见 §12。
+**#3 ~ #5** —— 又两个 dtype/对齐问题，最后通过：
+- `#3`：**`parse_PDB` 的残基集合与官方不同**。硬 assert 报 `BH3_Mcl-1_3KZ0 链A: 143 vs 150`。
+  查证：该链编号 `172..321`（**跨度正好 150**），缺 `196–202` 共 7 个。
+  ⇒ BindingGYM 的序列按**残基编号跨度**索引；官方 ProteinMPNN 的 `parse_PDB` **按编号补洞**
+  （缺失位 `mask=0`，对 `_scores` 贡献 0），而 LigandMPNN 的 `parse_PDB` **只返回观测到的残基**。
+  修：按 `(chain, 编号−该链最小编号)` 建 `pos_map`，未观测位不参与打分 —— 与 anchor 的 `mask=0` 等价。
+  **没有这个 assert，就会按错位的序列打完全部 376,446 个 variant。**
+- `#4`：`fd["S"]` 是 int32 而 token 张量默认 int64 → `index_put` dtype 不匹配；
+  `#5`：`NLLLoss` 的 target 必须 int64（官方 `tied_featurize` 产出 int64，LigandMPNN 的 `featurize` 产出 int32）。
+
+### smoke 结论（job 51754669，52 s，**gate 通过**）
+
+**(1) `use_sequence` 的语义 —— LigandMPNN 的 CLI help 是错的**
+```
+use_sequence=True   max|Δlog_probs| = 0.000e+00   ⇒ 只看 backbone
+use_sequence=False  max|Δlog_probs| = 9.271e-01   ⇒ 条件于其余序列
+```
+其 CLI help 写的是「1 = 用氨基酸序列信息，0 = 只用 backbone」，**方向相反**。
+⚠️ **这个结果直接纠正了我自己实现里的一处方向错误**：`joint_masked_logprobs` 原本写成
+`order_mask=ones, pos_idx=0`（把突变位点排到解码序**最前**）—— 那样得到的是 **backbone-only**
+分数而非口径 B。已改为 `order_mask=zeros, pos_idx=1`（排到**最后** ⇒ 条件于其余全部）。
+LASErMPNN 侧同一逻辑同步修正。**若无此探针，口径 B 的四个模型全部会是错的。**
+
+**(2) 正确性 gate —— 通过，且两个 assay 逐位复现 anchor**
+
+| assay | n | rho(mine, anchor) | rho_DMS 本次 | rho_DMS anchor |
+|---|---|---|---|---|
+| `PSD95_CRIPT_1BE9` | 1577 | **1.0000** | 0.3677 | 0.3677 |
+| `Z-domain_ZpA963_HL2_2M5A` | 600 | **1.0000** | 0.3774 | 0.3774 |
+| `BH3_Mcl-1_3KZ0` | 518 | 0.9889 | 0.6517 | 0.6514 |
+
+判据是 `> 0.95`，实测两个 **1.0000**。`BH3_Mcl-1` 的 0.9889 正对应那个 7 残基缺口
+（补洞方式的细微差异影响了邻居图），`rho_DMS` 只差 0.0003 ≈ σ/60，可接受且有解释。
+
+**(3) 吞吐**：2,695 variants / 52 s（含模型加载与 CUDA 验证）⇒ 约 **35,000 (n·L)/s**，
+比 anchor 的 13,000 快 2.7×（省掉了逐 assay 起子进程的开销）。
+全库 Σn·L = 135,744,347 ⇒ **单个 config 约 65 min** ⇒ walltime 取 2 h。
+
+### env 的两个补装（模块级 import 咬人）
+建 env 时按「推理用不上」裁掉的包，其实在**模块级**被 import：
+`lasermpnn-bgym` 缺 `logomaker`（`utils/helper_functions.py` 顶层 import）、
+`adflip-bgym` 缺 `matplotlib`（`model/discrete_flow_aa.py` 顶层 import）。已补装并验证 import 通过
+（LASErMPNN `aa_short_to_idx[A,R,C]=0,1,4` ✓；ADFLIP `<MASK>=1`, vocab=33 ✓）。
+**教训：不要按「推理是否需要」去裁 repo 声明的依赖。**
 
 > 通用教训：**沿用一个 vendor 的 `parse_PDB` 时，它的默认过滤条件可能与 benchmark 的
 > 官方管线不同。** 这里 LigandMPNN 与 BindingGYM 在 occupancy 上的默认行为就不一致，
 > 而 BindingGYM 的结构恰好落在分歧点上。
+
+## 16. P1 全量已提交（2026-09-12）
+
+gate 通过后提交 5 个 config，各一个 job，2 h walltime、幂等（输出已存在即跳过，被截断可重投续跑）：
+
+| job | run_id | 模型 | ckpt | sc_ctx | 口径 |
+|---|---|---|---|---|---|
+| 51754950 | `proteinmpnn_ar` | ProteinMPNN | `v_48_020` | 0 | A |
+| 51754951 | `ligandmpnn_ar_nosc` | LigandMPNN | `v_32_020_25` | 0 | A |
+| 51754952 | `ligandmpnn_ar_sc` | LigandMPNN | `v_32_020_25` | **1** | A |
+| 51755044 | `proteinmpnn_mm` | ProteinMPNN | `v_48_020` | 0 | **B** |
+| 51755045 | `ligandmpnn_mm_sc` | LigandMPNN | `v_32_020_25` | **1** | **B** |
+
+输出：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/scores/{run_id}/{DMS_id}.csv`，
+保留原 DMS csv 全部列与行序 + `design_score`/`global_score` + `seed` + `run_id`。

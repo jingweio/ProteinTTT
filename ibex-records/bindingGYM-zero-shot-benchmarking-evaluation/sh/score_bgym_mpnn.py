@@ -81,6 +81,31 @@ def joint_masked_logprobs(model, fd, pos_idx):
     return lp[:, pos_idx, :]
 
 
+def _align_map(obs_seq, ref_seq):
+    """把观测到的残基序列比对到 BindingGYM 参考序列,返回 {观测下标: 参考下标}。
+
+    用于既有 insertion code 又有缺口的链(实例:4ZFF/4ZFG 的抗体重链 H —— Kabat 编号带
+    A/B/C 插入码,同时还缺几个残基 ⇒ 「按序」和「按编号」两种映射都不成立)。
+    简单 Needleman-Wunsch(match +1 / mismatch -1 / gap -1);两条序列本是同一蛋白,
+    比对唯一且几乎全等,只用来吸收插入与缺口。
+    """
+    n, m = len(obs_seq), len(ref_seq)
+    D = np.zeros((n + 1, m + 1), dtype=np.int32)
+    D[:, 0] = -np.arange(n + 1); D[0, :] = -np.arange(m + 1)
+    for i in range(1, n + 1):
+        oi = obs_seq[i - 1]
+        for j in range(1, m + 1):
+            D[i, j] = max(D[i-1, j-1] + (1 if oi == ref_seq[j-1] else -1),
+                          D[i-1, j] - 1, D[i, j-1] - 1)
+    i, j, out = n, m, {}
+    while i > 0 and j > 0:
+        if D[i, j] == D[i-1, j-1] + (1 if obs_seq[i-1] == ref_seq[j-1] else -1):
+            out[i-1] = j-1; i -= 1; j -= 1
+        elif D[i, j] == D[i-1, j] - 1: i -= 1
+        else: j -= 1
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="LigandMPNN repo 路径")
@@ -166,13 +191,25 @@ def main():
             sel = np.where(letters == c)[0]
             assert len(sel) > 0, f"{DMS_id}: 结构里没有链 {c}"
             rn = R_idx[sel]; lo, hi = int(rn.min()), int(rn.max())
-            span, nref = hi - lo + 1, len(wt_ref[c])
-            assert span == nref, (f"{DMS_id} 链{c}: 残基编号跨度 {span} ({lo}..{hi}) "
-                                  f"!= BindingGYM 序列长 {nref}")
-            pos_map[c] = {int(r) - lo: int(p) for r, p in zip(rn, sel)}
-            if len(sel) != nref:
-                print(f"  [gap] {DMS_id} 链{c}: 观测 {len(sel)}/{nref}, "
-                      f"缺 {nref - len(sel)} 个(不参与打分,与 anchor 的 mask=0 一致)")
+            span, nref, nobs = hi - lo + 1, len(wt_ref[c]), len(sel)
+            obs_seq = "".join(struct_seq[p] for p in sel)
+            # 三条映射路径,按可靠性排序;每条都在下面用 WT 逐位校验,选错会被 assert 拦住。
+            if nobs == nref and sum(obs_seq[k] != wt_ref[c][k] and obs_seq[k] != "X"
+                                    for k in range(nref)) == 0:
+                mode = "sequential"                       # 无缺口(可含 insertion code)
+                pos_map[c] = {k: int(sel[k]) for k in range(nref)}
+            elif span == nref:
+                mode = "resnum-span"                      # 有缺口、编号干净(如 3KZ0 链A)
+                pos_map[c] = {int(r) - lo: int(p) for r, p in zip(rn, sel)}
+            else:
+                # 既有 insertion code 又有缺口(如 4ZFF/4ZFG 的抗体重链 H):比对定位
+                mode = "align"
+                am = _align_map(obs_seq, wt_ref[c])
+                pos_map[c] = {v: int(sel[k]) for k, v in am.items()}
+            if nobs != nref or mode != "sequential":
+                print(f"  [map] {DMS_id} 链{c}: mode={mode}, 观测 {nobs}/{nref}, "
+                      f"编号 {lo}..{hi}(跨度 {span}), 映射到 {len(pos_map[c])} 个位点"
+                      f"{'' if nobs==nref else '(未映射位不参与打分,与 anchor 的 mask=0 一致)'}")
             bad = [(k, struct_seq[p], wt_ref[c][k]) for k, p in pos_map[c].items()
                    if struct_seq[p] != wt_ref[c][k] and struct_seq[p] != "X"]
             assert not bad, f"{DMS_id} 链{c}: WT 不符,前 3 处 {bad[:3]}"

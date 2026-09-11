@@ -62,6 +62,36 @@ stage2 对 binding 是严格 zero-shot，是唯一正确选择。
 且 B 显式保留了 variant 内部的**位点集合**，只是假设这些位点在给定其余全原子 context 下条件独立
 （即不建模突变位点**彼此之间**的 epistasis）。A 建模，B 不建模 —— 这个差异会如实写进结果表。
 
+### 3.1 口径 B 的落地方式（P0 调研后的修正）
+
+读了 LigandMPNN `model_utils.py` 后发现两件事，口径 B 的实现必须据此定：
+
+- **不能直接用 `single_aa_score`** —— 它内部 `for idx in range(L)` 对**每个**位点各跑一次完整
+  decoder（`4D5_HER2` 的 L=1041 就是 1041 次 / 每次调用），逐 variant 调用完全不可行。
+- **但它给出了正确写法**：位点 i 的 logits 由 `order_mask[i]=0`（把 i 排到解码序最前）得到，
+  条件于 `S_true` 的其余位点。把 `order_mask` 在**该 variant 的整组突变位点**上一起置 0，
+  **一次 decoder pass** 就同时得到这 k 个位点的 log-probs，各自条件于"其余位点保持 WT"。
+
+⇒ 口径 B 实现为 `joint_masked_score(feature_dict, pos_set)`，写在**我们自己的 wrapper 里**，
+不改 vendor repo。成本 = **每个 distinct 位点组合一次 pass**（组合库内所有 variant 共享同一
+masked 上下文）⇒ 全库 32,977 次，而非 376,446 次。
+
+这同时让口径 B 与 ADFLIP 的天然口径**严格同构**（都是"mask 掉这组位点、条件于其余全部"），
+四个模型因此真正可比。
+
+> 顺带记录一个被否决的替代方案：把 `single_aa_score` 限制到突变位点、并条件于**mutant**
+> 的其余位点（即 pseudo-likelihood，能通过条件捕捉 epistasis）。它更强，但成本是
+> 每 variant k 次 pass（≈376k×3.5），且与 ADFLIP 不同构 —— 故作为可选的 follow-up，不进主表。
+
+### 3.2 `_scores` 的确切定义（逐字复刻，勿改）
+
+官方 `protein_mpnn_utils.py:39-47` 的 `_scores` **长度归一被注释掉了**：
+```python
+scores = torch.sum(loss * mask, dim=-1)   # / torch.sum(mask, dim=-1)  ← 注释掉的
+```
+即**未归一的 NLL 求和**。`design_score = -mean_over_M(_scores(S, log_probs, mask*chain_M*chain_M_pos))`，
+`global_score` 用 `mask`。新模型一律复刻此定义，不得"顺手修正"成均值。
+
 ## 4. 数据规模 —— 组合库结构决定了成本
 
 实测 25 assay：**376,446 variants，但只有 2,220 个突变位点、32,977 个 distinct 位点组合。**
@@ -156,7 +186,37 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 ## 11. Change log
 
 - 2026-09-11 22:46 · 建 project，完成四个 repo 的能力调研，写下本计划（status PLANNED）。
+- 2026-09-11 23:0x · P0：数据/权重/repo 全部上 ibex 并校验；发现 login node 建 env 会被 Kill，改走 sbatch(job 51751154)；
+  据 LigandMPNN 源码修正口径 B 的实现为 joint_masked_score（1 pass/位点组合，而非 single_aa_score 的 L 次/次调用）。
 
 ## 12. Results
 
 *(待填 —— 全部 run 完成后补 headline 表)*
+
+## 13. P0 执行记录（2026-09-11）
+
+**已完成：**
+- BindingGYM 数据 → ibex 共享区 `/ibex/user/guoj0f/share/BindingGYM/input/`
+  （624 MB / 51 文件，**双侧文件数核对 OK**：`Binding_substitutions_DMS` 28/28、`structures` 22/22；
+  `msas/` 未同步 —— 结构类模型用不上）。
+- 官方 harness `baselines/protein_mpnn/{compute_fitness_multi_pdb.py,protein_mpnn_utils.py}`
+  与 `training/cache/v_48_020.pt` → 同一共享区，**ibex 侧 md5 `91d54c97a68bf551114f8c74c785e90f`
+  与 anchor 那轮逐位一致**。
+- 四个模型 repo → 按分支隔离的 `…/{branch}/ibex-records/{project}/models/`，
+  **rsync 空跑四个全部 0 待传**。StaB-ddG 的 `output/`（stage3 SKEMPI-finetuned ckpt）
+  **物理排除**，作为 leakage guard。
+- LigandMPNN 权重下载并镜像到 `/ibex/user/guoj0f/share/model_params/LigandMPNN/`：
+  `proteinmpnn_v_48_020.pt` md5 **`91d54c97…` = anchor 同一份权重**；
+  `ligandmpnn_v_32_020_25.pt` `c2488988…`；`ligandmpnn_v_32_010_25.pt` `5cb0c045…`。
+
+**踩到的坑（已记录，供后续 session）：**
+- ⚠️ **login node 上建 conda env 会被 Kill。** `ligandmpnn-bgym` 在 login node 上
+  `conda create` 时被 `Killed`（`ulimit` 显示 unlimited、节点有 265 GB available ⇒ 不是
+  ulimit，而是 Ibex login node 的 process reaper）。**改用 sbatch 在计算节点建 env**，
+  顺带在真 a100 上做 §4 要求的经验验证（`torch.cuda.is_available()` + 一次真 matmul）。
+  `adflip-bgym` 侥幸在 login node 建成 —— 说明这是负载相关的间歇失败，更该走 sbatch。
+- StaB-ddG 同步后 `examples/` 双侧差 8 个文件，查证为 `examples/list_of_mutations/output/`
+  下的示例运行产物，被 `--exclude 'output'` 正确排除 ⇒ **预期行为，非缺漏**。
+
+**env 状态：** `bgym-official`(已有,指标口径) / `stabddg`(已有) / `adflip-bgym`(已建) ；
+`ligandmpnn-bgym`+`lasermpnn-bgym` 由 sbatch job **51751154** 建（含 CUDA 经验验证与 bytecode 预编译）。

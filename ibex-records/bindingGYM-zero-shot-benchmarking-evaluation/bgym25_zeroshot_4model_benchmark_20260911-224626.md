@@ -147,8 +147,16 @@ BindingGYM **不是单点突变库**：25 个 assay 里只有 4 个是 ≥99% �
 
 ## 8. 执行分期（每个 job walltime ≤ 8 h）
 
-> 今天实测 Ibex：240 张 a100 仅 5 张 idle，但**等待时间几乎只取决于申请的 walltime** ——
-> 1×a100 且 `--time ≤8h` 基本立刻起；22h 的要等 ~2.5 天。故一律切成 ≤8h 的块。
+> ⚠️ **已更正（2026-09-11 23:40）**：先前写的「1×a100 且 `--time ≤8h` 基本立刻起」是
+> 从**别人**的 pending 作业预估里读出来的，**不适用于我们账号**。实测我们提交的
+> 2h / 1×a100 job 被排到 **+21 小时**（est `2026-09-12T20:52`）。
+> 原因：`sshare` 显示我们 **FairShare = 0.0997**（RawUsage 2,575,080 / NormShares 0.0256），
+> `sprio` 的 997 分几乎全部来自 fairshare 项。
+> ⇒ **短 walltime 仍然有帮助，但不足以抵消低 fairshare。** 两条应对：
+>   1. **不需要 GPU 的一律走 CPU-only** —— `batch` 分区有 99 个 idle 节点 / 8,272 个 idle 核，
+>      CPU job 几分钟就起（实测建 env 的 job 从 GPU 的 +21h 变成立刻 RUNNING）。
+>   2. **用 `--dependency` 提前入队**，并让所有打分脚本**幂等**（输出已存在即跳过），
+>      这样被 TIMEOUT 截断后重投即续跑。
 
 | 期 | 内容 | 产出 |
 |---|---|---|
@@ -187,6 +195,9 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 
 - 2026-09-11 22:46 · 建 project，完成四个 repo 的能力调研，写下本计划（status PLANNED）。
 - 2026-09-11 23:0x · P0：数据/权重/repo 全部上 ibex 并校验；发现 login node 建 env 会被 Kill，改走 sbatch(job 51751154)；
+- 2026-09-11 23:40 · 更正 §8 的排队判断：我方 FairShare 仅 0.0997，2h/a100 被排到 +21h。
+  建 env 改走 CPU-only(立刻 RUNNING)；GPU 只留给真正要 GPU 的打分。
+- 2026-09-11 23:45 · 冻结 chain partition(P4 阻塞项解除)；提交 P1 smoke(job 51753075, 依赖 51752817)。
   据 LigandMPNN 源码修正口径 B 的实现为 joint_masked_score（1 pass/位点组合，而非 single_aa_score 的 L 次/次调用）。
 
 ## 12. Results
@@ -220,3 +231,32 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 
 **env 状态：** `bgym-official`(已有,指标口径) / `stabddg`(已有) / `adflip-bgym`(已建) ；
 `ligandmpnn-bgym`+`lasermpnn-bgym` 由 sbatch job **51751154** 建（含 CUDA 经验验证与 bytecode 预编译）。
+
+## 14. P1 准备与 chain partition（2026-09-11 23:4x）
+
+**chain partition 已冻结** —— `refs/chain_partition.tsv`，fingerprint md5 `068dae9cc3338368f0e89ebe39e752f4`
+（生成环境 python 3.10.20 / numpy 2.2.6 / pandas 2.3.0，在 StaB-ddG 自己的 `stabddg` env 内算）。
+
+22/25 是两链 ⇒ 平凡。3 个三链 assay 由重原子接触图（<5 Å）无歧义解开，
+**且与 assay 命名语义独立吻合**（两条互不依赖的证据）：
+
+| assay | 链(长度) | 最大接触对 | partition |
+|---|---|---|---|
+| `4D5_HER2_1N8Z` | A:214 B:220 C:607 | **A-B:942**（Fab 轻重链配对） | `AB_C` |
+| `5A12_Ang2_4ZFG` | A:220 H:219 L:213 | **H-L:858** | `HL_A` |
+| `5A12_VEGF_4ZFF` | C:96 H:219 L:213 | **H-L:912** | `HL_C` |
+
+规则：2 链平凡；3 链取接触数最大的一对为 binder1，余者为 binder2。
+运行时**只读此文件**，不重算（§1b-0）。
+
+**P1 smoke 的三个 gate**（job 51753075，1h walltime，依赖 env build 51752817）：
+1. `use_sequence` 的语义方向 —— 读 LigandMPNN 源码得到的方向与其 CLI help **相反**，
+   用「扰动其余位点、看目标位点 log_probs 是否变化」实验定案，不靠推理。
+2. **正确性 gate**：`score_bgym_mpnn.py` 用 `protein_mpnn` + `v_48_020` + AR + seed 1 + M=5
+   跑 3 个小 assay，与 anchor 的逐 variant 分数对照。
+   判据 `rho(mine, anchor) > 0.95`（两者只差解码序随机），且两侧 `rho_DMS` 落在
+   per-assay σ≈0.018 内。anchor 对照数据已取到 `refs/anchor_scores/`（3 个 assay，共 2,695 行）。
+3. 实测吞吐 → 定后续 job 的 walltime。
+
+**smoke assay 选取**：`Z-domain_ZpA963_HL2_2M5A`(600, L=116)、`BH3_Mcl-1_3KZ0`(518, L=173)、
+`PSD95_CRIPT_1BE9`(1577, L=120) —— 都小且快，1h walltime 足够，排队也最快。

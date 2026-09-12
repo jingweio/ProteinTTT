@@ -207,7 +207,58 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 
 ## 12. Results
 
-*(待填 —— 全部 run 完成后补 headline 表)*
+### 12.1 P1 —— MPNN 家族,25/25 全齐
+
+| run_id | 口径 | Spearman | AUC | MCC | NDCG | AP |
+|---|---|---|---|---|---|---|
+| `proteinmpnn_mm` | B | **0.389911** | 0.685402 | 0.155203 | 0.719684 | 0.220039 |
+| `proteinmpnn_ar` | A | **0.389889** | 0.686126 | 0.153173 | 0.720556 | 0.220086 |
+| `ligandmpnn_ar_nosc` | A | 0.388257 | 0.686058 | 0.153354 | 0.721301 | 0.223911 |
+| `ligandmpnn_ar_sc` | A | 0.388257 | 0.686058 | 0.153354 | 0.721301 | 0.223911 |
+| `ligandmpnn_mm_sc` | B | 0.377051 | 0.682353 | 0.149206 | 0.718931 | 0.221173 |
+
+参照：**anchor 那轮 0.391356**，**官方发布 0.396950**。
+本次 `proteinmpnn_ar` = 0.389889，与 anchor 差 **−0.0015**（σ_combined 0.007–0.013 之内），
+与官方差 −0.0071。差异来源是三路映射对 `3KZ0`/`4ZFF`/`4ZFG` 的处理与官方 parser 不同 + 解码序随机。
+
+### 12.2 🔴 LigandMPNN 的「有/无侧链」在 BindingGYM 的链约定下**不可能有差别**
+
+`ligandmpnn_ar_sc` 与 `ligandmpnn_ar_nosc` **五项指标、25 个 assay 全部逐位相同**。
+根因在 `LigandMPNN/model_utils.py:1252`：
+
+```python
+mask_residues = input_features["chain_mask"]
+xyz_37_m = xyz_37_m * (1 - mask_residues[:, :, None])   # 侧链只对 chain_mask==0 的残基生效
+```
+
+侧链原子**只有 fixed 残基（`chain_mask==0`）才作为 context**。而 BindingGYM 的 `chain_id`
+把**所有链都列为 designed** ⇒ `chain_mask` 全 1 ⇒ `xyz_37_m*(1-1)=0` ⇒ **侧链 context 恒为零**。
+
+⇒ 要真正测这个轴，必须把 **partner 链设为 fixed**。已统计：**21/25 个 assay 有一条从不被突变的
+partner 链**可以设 fixed（4 个 Z-domain assay 两条链都突变，做不了）。
+已加 `--designed_chains mutated` 并提交配对实验 `ligandmpnn_ar_scfix` / `ligandmpnn_ar_noscfix`
+（job 51772043 / 51772047）。⚠️ 该 config 的 `chain_mask` 与 anchor 不同 ⇒ 解码序与
+`design_score` 的打分范围都变了，**只能与自己的对照比，不能直接并进主表**。
+
+### 12.3 口径 A vs 口径 B：**均值等价，但逐 assay 差异很大**
+
+ProteinMPNN 上配对对照（同 ckpt、同 seed，唯一差别是口径）：
+
+```
+mean Δ = +0.0000   sd = 0.0446   正号 12/25   Wilcoxon p = 0.874
+```
+
+**均值上完全无法区分**，而口径 B 便宜约 **8×**（`proteinmpnn_mm` 17 min vs `ligandmpnn_ar_*` 2.5 h）。
+
+⚠️ 但**不能据此说两个口径给出的是同一套分数**：配对差的 **sd = 0.0446 ≈ 2.4× 解码序噪声 σ(0.0184)**，
+逐 assay 摆动很大（如 `Z-domain_ZpA963_HL1` 0.1839 → 0.3343，`GB1_IgG-Fc_2016` 0.4842 → 0.3892）。
+是**均值相消**，不是逐 assay 一致。对单个 assay 下结论时必须注明用的是哪个口径。
+
+### 12.4 LigandMPNN ≈ ProteinMPNN
+
+0.388257 vs 0.389889，差 −0.0016，远小于 σ。BindingGYM 全是 protein–protein、**没有小分子配体**，
+LigandMPNN 相对 ProteinMPNN 的增量能力（原子级配体 context）在这里没有用武之地 —— 结果符合预期。
+
 
 ## 13. P0 执行记录（2026-09-11）
 

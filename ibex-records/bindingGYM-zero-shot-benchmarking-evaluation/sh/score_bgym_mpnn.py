@@ -120,6 +120,14 @@ def main():
     ap.add_argument("--use_side_chain_context", type=int, default=0)
     ap.add_argument("--use_atom_context", type=int, default=1)
     ap.add_argument("--protocol", default="ar", choices=["ar", "jm"])
+    ap.add_argument("--designed_chains", default="index", choices=["index", "mutated"],
+                    help="index=照 BindingGYM 的 chain_id(全部链,与 anchor 一致); "
+                         "mutated=只把【实际携带突变】的链设为 designed,partner 设 fixed。"
+                         "后者是让 side-chain context 能起作用的唯一途径 —— LigandMPNN 的 "
+                         "model_utils.py:1252 `xyz_37_m * (1 - chain_mask)` 决定了侧链只对 "
+                         "fixed(chain_mask=0) 残基生效;BindingGYM 的 chain_id 把所有链都列为 "
+                         "designed ⇒ chain_mask 全 1 ⇒ 侧链 context 恒为零(实测两个 config "
+                         "五项指标小数点后六位完全相同)。")
     ap.add_argument("--num_seq_per_target", type=int, default=5, help="M：平均多少个解码序")
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--run_id", required=True)
@@ -170,7 +178,18 @@ def main():
         letters = np.array([str(c) for c in pdict["chain_letters"]])
         R_idx = pdict["R_idx"].cpu().numpy().astype(int)   # PDB 残基编号
         L = len(letters)
-        designed = [c for c in str(chain_ids)] if str(chain_ids) else sorted(set(letters))
+        if a.designed_chains == "mutated":
+            mc = set()
+            for m in g["mutant"]:
+                d = ast.literal_eval(m) if str(m).startswith("{") else {}
+                for ch, s in d.items():
+                    if str(s).strip(): mc.add(ch)
+            designed = sorted(mc) if mc else ([c for c in str(chain_ids)] or sorted(set(letters)))
+            fixedc = [c for c in (str(chain_ids) or sorted(set(letters))) if c not in designed]
+            print(f"  [chains] designed={''.join(designed)} fixed={''.join(fixedc) or '(无)'}"
+                  + ("" if fixedc else "  ← 无 fixed 链 ⇒ 侧链 context 仍为零"))
+        else:
+            designed = [c for c in str(chain_ids)] if str(chain_ids) else sorted(set(letters))
         pdict["chain_mask"] = torch.tensor(
             [1 if c in designed else 0 for c in letters], device=dev).float()
 

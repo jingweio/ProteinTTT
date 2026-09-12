@@ -18,6 +18,22 @@ import argparse, ast, os, sys, time
 import numpy as np, pandas as pd, torch
 
 
+class Config:
+    """🔴 ADFLIP_v1.pt 是用 test/benchmark.py 里定义在 __main__ 的 Config 类 pickle 的,
+    反序列化时 unpickler 会去 __main__ 找同名类。本脚本作为 __main__ 运行,所以必须在这里
+    原样定义它,否则 torch.load 报 "Can't get attribute 'Config' on <module '__main__'>"。
+    定义逐字取自 ADFLIP/test/benchmark.py。"""
+    def __init__(self, dictionary):
+        for key, value in dictionary.items():
+            if isinstance(value, dict):
+                value = Config(value)
+            self.__dict__[key] = value
+
+    def to_dict(self):
+        return {k: (v.to_dict() if isinstance(v, Config) else v)
+                for k, v in self.__dict__.items()}
+
+
 def build_model(repo, ckpt_path, device):
     sys.path.insert(0, repo)
     from data.residue_config import configure as configure_residues

@@ -18,6 +18,24 @@ import argparse, ast, os, sys, time
 import numpy as np, pandas as pd, torch
 
 
+def _align_map(obs, ref):
+    """Needleman-Wunsch,返回 {观测下标: 参考下标}。与 score_bgym_mpnn.py 同一实现。"""
+    n, m = len(obs), len(ref)
+    D = np.zeros((n + 1, m + 1), dtype=np.int32)
+    D[:, 0] = -np.arange(n + 1); D[0, :] = -np.arange(m + 1)
+    for i in range(1, n + 1):
+        oi = obs[i - 1]
+        for j in range(1, m + 1):
+            D[i, j] = max(D[i-1, j-1] + (1 if oi == ref[j-1] else -1), D[i-1, j] - 1, D[i, j-1] - 1)
+    i, j, out = n, m, {}
+    while i > 0 and j > 0:
+        if D[i, j] == D[i-1, j-1] + (1 if obs[i-1] == ref[j-1] else -1):
+            out[i-1] = j-1; i -= 1; j -= 1
+        elif D[i, j] == D[i-1, j] - 1: i -= 1
+        else: j -= 1
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="含 LASErMPNN 包的【父】目录")
@@ -77,16 +95,22 @@ def main():
         chi = batch.chi_angles.clone()
         wt_seq = "".join(aa_idx_to_short[int(i)] for i in wt_idx)
 
-        # 🔴 硬校验:解析出的 WT 必须与 BindingGYM 的 wildtype_sequence 拼接一致(同时建立索引映射)
+        # 🔴 LASErMPNN 会丢掉 backbone 不完整的残基(实测 BH3_Bcl-xL 180 vs BindingGYM 229),
+        #    所以不能要求数量相等 —— 用比对建立【观测下标 -> 参考下标】映射,未映射位不参与打分。
         wt_ref = ast.literal_eval(row["wildtype_sequence"])
         order = [c for c in str(chain_ids)] or sorted(wt_ref)
         ref = "".join(wt_ref[c] for c in order)
-        assert len(wt_seq) == len(ref), f"{DMS_id}: LASErMPNN 解析 {len(wt_seq)} 残基 vs BindingGYM {len(ref)}"
-        bad = [(k, wt_seq[k], ref[k]) for k in range(len(ref))
-               if wt_seq[k] != ref[k] and wt_seq[k] != "X"]
-        assert not bad, f"{DMS_id}: WT 不符,前 3 处 {bad[:3]}"
+        amap = _align_map(wt_seq, ref)              # obs_idx -> ref_idx
+        mism = [(k, wt_seq[k], ref[v]) for k, v in amap.items() if wt_seq[k] != ref[v] and wt_seq[k] != "X"]
+        assert not mism, f"{DMS_id}: 比对后 WT 仍不符,前 3 处 {mism[:3]}"
+        assert len(amap) >= 0.5 * len(wt_seq), \
+            f"{DMS_id}: 比对只匹配上 {len(amap)}/{len(wt_seq)},映射不可信"
+        ref2obs = {v: k for k, v in amap.items()}   # 参考下标 -> 观测下标
+        if len(wt_seq) != len(ref):
+            print(f"  [map] {DMS_id}: LASErMPNN 解析 {len(wt_seq)}/{len(ref)},"
+                  f" 比对映射 {len(amap)} 个位点(未映射位不参与打分)")
 
-        L = len(ref)
+        L = len(wt_seq)
         gen = torch.Generator(device="cpu").manual_seed(a.seed)
         randn = torch.randn([a.num_decoding_orders, L], generator=gen).to(model.device)
 
@@ -94,8 +118,11 @@ def main():
         for i in g.index:
             mseq = ast.literal_eval(g.loc[i, "mutated_sequence"])
             mut_full = "".join(mseq[c] for c in order)
-            diff = [k for k in range(L) if mut_full[k] != ref[k]]
-            S = torch.tensor([aa_short_to_idx.get(c, 20) for c in mut_full], device=model.device)
+            diff = [ref2obs[k] for k in range(len(ref))
+                    if mut_full[k] != ref[k] and k in ref2obs]   # 观测坐标
+            S = wt_idx.clone()
+            for k, o in ref2obs.items():
+                S[o] = aa_short_to_idx.get(mut_full[k], 20)
 
             if a.protocol == "ar":
                 tot = 0.0
@@ -120,8 +147,9 @@ def main():
                         acc = lp if acc is None else acc + lp
                     cache[key] = (acc / a.num_decoding_orders).cpu().numpy()
                 lp = cache[key]
-                scores.append(sum(float(lp[k, aa_short_to_idx[mut_full[k]]] -
-                                        lp[k, aa_short_to_idx[ref[k]]]) for k in diff))
+                obs2ref = {v: k for k, v in ref2obs.items()}
+                scores.append(sum(float(lp[o, aa_short_to_idx[mut_full[obs2ref[o]]]] -
+                                        lp[o, aa_short_to_idx[ref[obs2ref[o]]]]) for o in diff))
 
         g = g.copy(); g["laser_score"] = scores
         all_g.append(g)

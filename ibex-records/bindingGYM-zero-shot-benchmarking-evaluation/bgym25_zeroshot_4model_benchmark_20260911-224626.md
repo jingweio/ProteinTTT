@@ -200,6 +200,10 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 - 2026-09-11 23:45 · 冻结 chain partition(P4 阻塞项解除)；提交 P1 smoke(job 51753075, 依赖 51752817)。
 - 2026-09-12 00:1x · smoke 三轮修复:setuptools<81 补 pkg_resources;heredoc 变量展开 bug;
 - 2026-09-12 00:4x · smoke #5 gate 通过(两个 assay rho=1.0000 逐位复现 anchor)。
+- 2026-09-12 05:0x · P1 全量 25/25;发现侧链 flag 无作用对象,加 --designed_chains mutated 重跑。
+- 2026-09-12 13:4x · 侧链对比出结果(+0.0082, p=0.0158,含 4 个零差异内部对照,见 §17)。
+- 2026-09-12 14:2x · 补记 §17-§20:吞吐/walltime 策略、P2-P4 的失败与修复、五类 parser 残基集合差异。
+  ⚠️ 本次补记前,约 6 小时的进展只在 commit message 里、未进文档正文 —— 已纠正。
   探针纠正了 joint_masked 的解码序方向(原写法得到的是 backbone-only)。P1 五个 config 已提交。
   失败传播(坏 job 曾伪装成 COMPLETED);parse_atoms_with_zero_occupancy=True(BindingGYM 结构 occ 全为 0,
   且官方管线本就不按 occupancy 过滤 ⇒ 置 True 才与 anchor 一致)。
@@ -405,3 +409,139 @@ gate 通过后提交 5 个 config，各一个 job，2 h walltime、幂等（输�
 
 输出：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/scores/{run_id}/{DMS_id}.csv`，
 保留原 DMS csv 全部列与行序 + `design_score`/`global_score` + `seed` + `run_id`。
+
+---
+
+## 17. 🎯 LigandMPNN 的侧链对比 —— 结果（2026-09-12，25/25 完成）
+
+§12.2 指出：照 BindingGYM 的链约定，侧链 flag **不可能有作用对象**。改用
+`--designed_chains mutated`（把从不被突变的 partner 链设为 fixed）后，25/25 跑完：
+
+| | Spearman | AUC | MCC | NDCG | AP |
+|---|---|---|---|---|---|
+| `ligandmpnn_ar_scfix`（+侧链） | **0.389560** | 0.688378 | 0.162368 | 0.726332 | 0.223533 |
+| `ligandmpnn_ar_noscfix`（−侧链） | 0.382713 | 0.684321 | 0.155455 | 0.719661 | 0.220795 |
+| Δ | **+0.0068** | +0.0041 | +0.0069 | +0.0067 | +0.0027 |
+
+**五项指标全部偏向 +侧链。** 限定在 21 个**确实有 fixed partner 链**的 assay 上做配对检验：
+
+```
++侧链 0.4081   −侧链 0.3999   mean Δ = +0.0082
+sd 0.0134      正号 15/21      Wilcoxon p = 0.0158
+```
+
+✅ **内部对照（这条最关键）**：4 个两条链都被突变、**没有 fixed 链**的 Z-domain assay，
+Δ = **+0.000000（逐位精确相同）**。这从实验上反证了 §12.2 定位的机制
+（`model_utils.py:1252` 的 `xyz_37_m * (1 - chain_mask)`），而不只是读代码的推断。
+
+逐 assay（21 个，按 Δ 降序摘录）：`KRAS_RAF1_6VJJ` +0.0355、`KRAS_SOS1_8BE4` +0.0293、
+`KRAS_RAF1-RBD_6VJJ` +0.0229、`hYAP65_1JMQ` +0.0198、`4D5_HER2_1N8Z` +0.0194 …
+负向的 6 个：`BH3_Bcl-xL_1PQ1` −0.0183、`KRAS_DARPinK27_5O2S` −0.0122、`BH3_Mcl-1_3KZ0` −0.0066、
+`HLA-A2_TAPBPR_5WER` −0.0037、`5A12_Ang2_4ZFG` −0.0012、`5A12_VEGF_4ZFF` −0.0007。
+
+⚠️ **口径说明**：该 config 的 `chain_mask` 与 anchor 不同（解码序与 `design_score` 的打分范围
+都变了），**只能与自己的对照（`noscfix`）比，不能并进 §12.1 的主表**。
+
+## 18. 吞吐实测与 walltime 策略（风险 #1 兑现）
+
+| run | 2 h 内完成 | 外推全量 |
+|---|---|---|
+| `proteinmpnn_mm`（口径 B） | 23/25（17 min） | ~20 min |
+| `ligandmpnn_ar_*`（口径 A） | 25/25 | ~2.5 h |
+| `lasermpnn_jm`（口径 B） | 12/25（1 h 37） | ~3.5 h |
+| **`lasermpnn_ar`（口径 A）** | **3/25** | **~16 h** |
+| `stabddg` | 8/25 | ~6 h |
+
+§10 的风险 #1（LASErMPNN 吞吐未知）**兑现了**：等变图网络 + 全原子，AR 口径逐 variant 一次
+forward，全量约 16 h。处置：**优先保 `jm` 口径**（四模型唯一共同可比的那一列），
+`ar` 口径排 4 个 slot、**跑到多少报多少并标注覆盖率**，不拿部分冒充全量。
+
+**walltime 策略**：所有 run 改为 **`--dependency=afterany` 链式排多个 2 h slot**，
+配合脚本幂等（输出已存在即跳过）⇒ 被 TIMEOUT 截断后自动续跑，不重算。
+
+## 19. P2/P3/P4 的失败与修复（2026-09-12）
+
+### 19.1 ADFLIP（两个 bug，第一个已修，第二个待修）
+
+**(a) `Can't get attribute 'Config' on <module '__main__'>`** — `ADFLIP_v1.pt` 是用
+`test/benchmark.py` 里**定义在 `__main__` 的 `Config` 类** pickle 的，unpickler 反序列化时
+会去 `__main__` 找同名类。已在脚本里原样定义该类。
+
+**(b) `size mismatch for model.layers.output.weight: [33,128] vs [20,128]`** — 我漏传了
+`Zoidberg_GNN` 的三个构造参数 `number_ligand_atom` / `mpnn_cutoff` / **`output_dim`**，
+其中 `output_dim` 决定输出词表大小（ckpt 是 33，默认退到 20）。
+已逐字对齐 `benchmark.py:248-266`，并改为与其一致的**严格加载 `ckpt["model"]`**。
+✅ 现在权重加载成功（日志 `权重严格加载成功; output_dim=33`）。
+
+**(c) 仍未解决** —— WT 校验全数失败：
+```
+4D5_HER2_1N8Z : ADFLIP 解析 1015 残基 vs BindingGYM 1041
+5A12_Ang2_4ZFG: ADFLIP 解析  648 残基 vs BindingGYM  652
+5A12_VEGF_4ZFF: ADFLIP 解析  520 残基 vs BindingGYM  528
+```
+与 LASErMPNN 同一类问题：**ADFLIP 的 parser 残基集合与 BindingGYM 不同**。
+需把「要求数量相等」的 assert 换成**逐链 NW 比对映射**（同 §19.2）。
+
+### 19.2 LASErMPNN（残基集合 + 链顺序）
+
+**(a) 残基数不等** —— `BH3_Bcl-xL_1PQ1: 解析 180 vs BindingGYM 229`；LASErMPNN 会丢掉
+backbone 不完整的残基（它要算 chi 角）。已把等长 assert 换成 NW 比对映射。
+
+**(b) 比对必须逐链做** —— 拼接后整体比对会在两条**同源**链之间错配。
+`Z-domain_ZSPA-1_1LP1`（链 A = Z-SPA-1 affibody，链 B = Z-domain，二者同源）报
+`[(85,'W','K'),(82,'F','Q'),(78,'K','N')]`。
+
+**(c) 仍未解决 —— 链顺序** —— 改逐链后错配位从 78/82/85 变成 **31/28/24，且残基对正好互换**
+（`(31,'K','W')` vs 原 `(85,'W','K')`）⇒ **链 A/B 被对调了**。
+我用 `batch.chain_indices` 的唯一值顺序去对应 `order`，这个假设不成立。
+需改用 LASErMPNN 自己的 `residue_identifiers` 取真实链字母。
+
+### 19.3 StaB-ddG —— 突变编号约定（已修，旧结果已作废）
+
+`stabddg/ppi_dataset.py:195` 用的是：
+```python
+mut_pos = int(mut[2:-1]) + mut_chain_offset - 1
+assert mut_seq[mut_pos] == wt_aa
+```
+它把 SKEMPI 串里的数字当作 **`seq_chain_X` 内的 1-based 下标**，**不是 PDB 残基编号**。
+我此前按残基编号生成，只有恰好对齐的 8 个 assay 通过，其余被它自己的 assert 拒掉。
+
+修法：**不猜它的约定** —— 用 StaB-ddG 自己的 `parse_PDB` 取 `seq_chain_X`，
+把 BindingGYM 的链序列 NW 比对上去，编号按比对到的下标生成，并断言比对后 WT 零错配。
+
+⚠️ **此前那 8 个 assay 的结果用的是旧（错）编号，已整体作废重算** ——
+移到 `/ibex/user/guoj0f/bindingGYM-zs-benchmark/stabddg_s2_OLD_wrong_numbering_1345`
+（**不删除，留证**）。它们通过只是编号碰巧对齐，无法保证每个 variant 都对。
+
+### 19.4 一个贯穿性的教训
+
+到目前为止，**四个 repo 的 PDB parser 对「哪些残基算数」各有各的规矩**，没有一个与
+BindingGYM 的序列约定天然对齐。已遇到五类：
+
+| # | 现象 | 出处 |
+|---|---|---|
+| 1 | occupancy 全 0 ⇒ `select("occupancy>0")` 返回 None | LigandMPNN |
+| 2 | 官方按残基编号**补洞**，vendor 只返回观测残基 | LigandMPNN vs BindingGYM |
+| 3 | Kabat **insertion code** + 缺口并存 ⇒ 跨度 ≠ 序列长 | 4ZFF/4ZFG 抗体重链 |
+| 4 | 丢掉 backbone 不完整的残基 | LASErMPNN / ADFLIP |
+| 5 | 突变编号是**序列下标**而非残基编号 | StaB-ddG |
+
+**通用对策**：一律「解析 → 逐链 NW 比对到 BindingGYM 参考序列 → 未映射位不参与打分」，
+并对比对后的 WT 做零错配断言。**每一类都不会报错、数字也完全合理，只有硬校验能拦住。**
+
+## 20. 当前状态快照（2026-09-12 14:26）
+
+| run | 覆盖 | 状态 |
+|---|---|---|
+| `proteinmpnn_ar` / `proteinmpnn_mm` | 25/25 | ✅ |
+| `ligandmpnn_ar_nosc` / `_sc` / `_mm_sc` | 25/25 | ✅ |
+| `ligandmpnn_ar_scfix` / `_noscfix` | 25/25 | ✅ 见 §17 |
+| `lasermpnn_jm` | 23/25 | 🔄 待修 §19.2(c) |
+| `lasermpnn_ar` | 7/25 | 🔄 RUNNING，慢（~16 h） |
+| `adflip_jm` | 0/25 | 🔄 待修 §19.1(c) |
+| `stabddg_s2` | 3/25 | 🔄 RUNNING（编号已修，重算中） |
+
+**产物路径**
+- per-variant 分数：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/scores/{run_id}/{DMS_id}.csv`
+- StaB-ddG：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/stabddg_s2/{DMS_id}/output/`
+- 逐 assay 指标 + leaderboard（已回流进 repo）：`ibex-records/{project}/results/`

@@ -19,6 +19,24 @@ AA3to1 = {'ALA':'A','ARG':'R','ASN':'N','ASP':'D','CYS':'C','GLU':'E','GLN':'Q',
           'THR':'T','TRP':'W','TYR':'Y','VAL':'V'}
 
 
+def _align_map(obs, ref):
+    """NW 比对,返回 {obs_idx: ref_idx}。"""
+    n, m = len(obs), len(ref)
+    D = np.zeros((n + 1, m + 1), dtype=np.int32)
+    D[:, 0] = -np.arange(n + 1); D[0, :] = -np.arange(m + 1)
+    for i in range(1, n + 1):
+        oi = obs[i - 1]
+        for j in range(1, m + 1):
+            D[i, j] = max(D[i-1, j-1] + (1 if oi == ref[j-1] else -1), D[i-1, j] - 1, D[i, j-1] - 1)
+    i, j, out = n, m, {}
+    while i > 0 and j > 0:
+        if D[i, j] == D[i-1, j-1] + (1 if obs[i-1] == ref[j-1] else -1):
+            out[i-1] = j-1; i -= 1; j -= 1
+        elif D[i, j] == D[i-1, j] - 1: i -= 1
+        else: j -= 1
+    return out
+
+
 def chain_residues(pdb):
     """{chain: {resnum: 1-letter aa}}，按 ATOM 行的第一个原子取 resname。"""
     out = {}
@@ -48,17 +66,29 @@ def main():
 
     pdb = os.path.join(a.structure_folder, row["pdb_file"])
     stem = os.path.splitext(os.path.basename(pdb))[0]
-    res = chain_residues(pdb)
     wt_ref = ast.literal_eval(row["wildtype_sequence"])
 
-    # 每链的最小编号 + 跨度校验(与 score_bgym_mpnn.py 同一规则)
-    lo = {}
+    # 🔴 StaB-ddG 的 ppi_dataset.py:195 用
+    #        mut_pos = int(mut[2:-1]) + chain_offset - 1
+    #    即把 SKEMPI 串里的数字当作【seq_chain_X 内的 1-based 下标】,不是 PDB 残基编号。
+    #    所以这里直接用它自己的 parse_PDB 取 seq_chain_X,再把 BindingGYM 序列比对上去,
+    #    编号按比对到的下标生成 —— 不猜它的约定。
+    sys.path.insert(0, os.environ.get("STABDDG_REPO", "."))
+    from stabddg.mpnn_utils import parse_PDB as mpnn_parse
+    pdict = mpnn_parse(pdb)[0]
+    seqc, ref2idx = {}, {}
     for c in wt_ref:
-        assert c in res, f"{DMS_id}: 结构里没有链 {c}"
-        ns = sorted(res[c]); lo[c] = ns[0]
-        span = ns[-1] - ns[0] + 1
-        assert span == len(wt_ref[c]), \
-            f"{DMS_id} 链{c}: 编号跨度 {span} != BindingGYM 序列长 {len(wt_ref[c])}"
+        key = f"seq_chain_{c}"
+        assert key in pdict, f"{DMS_id}: StaB-ddG 的 parse_PDB 里没有链 {c}"
+        seqc[c] = pdict[key]
+        am = _align_map(seqc[c], wt_ref[c])            # seq_chain 下标 -> BindingGYM 下标
+        mism = [(k, seqc[c][k], wt_ref[c][v]) for k, v in am.items()
+                if seqc[c][k] != wt_ref[c][v] and seqc[c][k] != "X"]
+        assert not mism, f"{DMS_id} 链{c}: 比对后 WT 不符,前 3 处 {mism[:3]}"
+        ref2idx[c] = {v: k for k, v in am.items()}     # BindingGYM 下标 -> seq_chain 下标
+        if len(seqc[c]) != len(wt_ref[c]):
+            print(f"  [map] {DMS_id} 链{c}: seq_chain 长 {len(seqc[c])} vs BindingGYM {len(wt_ref[c])},"
+                  f" 比对映射 {len(am)} 个位点")
 
     df = pd.read_csv(os.path.join(a.dms_input, f"{DMS_id}.csv"))
     muts, skipped = [], 0
@@ -69,12 +99,11 @@ def main():
             for tk in str(s).split(":"):
                 if not tk: continue
                 wt, pos, mt = tk[0], int(tk[1:-1]), tk[-1]
-                rn = lo[c] + pos - 1
-                if rn not in res[c]:           # 结构缺该残基(晶体断链)
-                    ok = False; continue
-                assert res[c][rn] == wt or res[c][rn] == "X", \
-                    f"{DMS_id}: 链{c} 序列位{pos}(resnum {rn}) 结构是 {res[c][rn]} 但 mutant 说 {wt}"
-                toks.append(f"{wt}{c}{rn}{mt}")
+                k = ref2idx.get(c, {}).get(pos - 1)     # BindingGYM 1-based -> seq_chain 0-based
+                if k is None: ok = False; continue      # 该位点在结构里缺失
+                assert seqc[c][k] == wt or seqc[c][k] == "X", \
+                    f"{DMS_id}: 链{c} 序列位{pos} -> seq_chain[{k}]={seqc[c][k]} 但 mutant 说 {wt}"
+                toks.append(f"{wt}{c}{k+1}{mt}")        # StaB-ddG 要 1-based seq_chain 下标
         if not toks: ok = False
         muts.append(",".join(toks) if ok else "")
         if not ok: skipped += 1

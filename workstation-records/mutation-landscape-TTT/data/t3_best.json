@@ -1,0 +1,25 @@
+{
+ "best_config": "sum|exp_tau5",
+ "best_loao": 0.4598612468053395,
+ "best_oracle": 0.48499245698030047,
+ "anchor_loao": 0.455130802176627,
+ "anchor_oracle": 0.46891504405578266,
+ "baseline": 0.39033090062621173,
+ "null_loao_mean": 0.39033090062621173,
+ "assays": [
+  "5A12_Ang2_fitness_4ZFG",
+  "ACE2_SARS2-RBD_enrich_6M17",
+  "CD19_FMC63_Fitness_7URV",
+  "CXCR4_CXCL12_enrich_8U4O",
+  "GB1_IgG-Fc_fitness_1FCC",
+  "HLA-A2_TAPBPR_meanscore_5WER",
+  "KRAS_PICK3CG-RBD_norfitness_1HE8",
+  "KRAS_RAF1-RBD_norfitness_6VJJ",
+  "KRAS_RAF1_norfitness_6VJJ",
+  "KRAS_RALGDS-RBD_norfitness_1LFD",
+  "PSD95_CRIPT_1BE9",
+  "PSD95_Tm2F_1BE9",
+  "SARS2-RBD_ACE2_deltaKd_6M0J",
+  "hYAP65_peptide_FunctioncalScore_1JMQ"
+ ]
+}

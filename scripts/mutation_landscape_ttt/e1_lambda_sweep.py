@@ -126,8 +126,11 @@ def main():
         vi = g.vi.to_numpy()
         assert (np.diff(vi) >= 0).all(), f"{dms}: site table not grouped by variant"
         f = np.exp(-g.dist.to_numpy(float) / a.tau)
-        assert a.agg == "max", f"agg {a.agg} not implemented"
-        w_var = np.fmax.reduceat(f, np.r_[0, np.flatnonzero(np.diff(vi)) + 1])
+        st = np.r_[0, np.flatnonzero(np.diff(vi)) + 1]
+        if a.agg == "max":     w_var = np.fmax.reduceat(f, st)
+        elif a.agg == "sum":   w_var = np.add.reduceat(f, st)
+        elif a.agg == "mean":  w_var = np.add.reduceat(f, st) / np.diff(np.r_[st, len(f)])
+        else: raise SystemExit(f"agg {a.agg} not implemented")
         y = lab[lab.DMS_id == dms].DMS_score.to_numpy(float)
         # variant_labels keeps only n_mut > 0, which drops the WT row; reproduce that filter
         nm = df["mutant"].map(lambda s: sum(len(v.split(":")) if v.strip() else 0

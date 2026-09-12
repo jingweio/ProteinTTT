@@ -35,7 +35,7 @@ for i in $(seq 0 $((N-1))); do
     --dms_index $i --dms_output $OUT \
     --checkpoint ${CKPT} --model_type ${MODEL_TYPE} \
     --use_side_chain_context ${SC} --protocol ${PROTO} \
-    --designed_chains ${DCH:-index} \
+    --designed_chains ${DCH:-index} --k_neighbors ${K:-0} \
     --num_seq_per_target 5 --seed 1 --run_id ${RUN_ID} || FAIL=1
 done
 echo "scored: $(ls $OUT/*.csv 2>/dev/null | wc -l) / $N"

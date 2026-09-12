@@ -148,6 +148,8 @@ def main():
     ap.add_argument("--use_side_chain_context", type=int, default=0)
     ap.add_argument("--use_atom_context", type=int, default=1)
     ap.add_argument("--protocol", default="ar", choices=["ar", "jm"])
+    ap.add_argument("--k_neighbors", type=int, default=0,
+                    help="裸 state_dict(无 num_edges 元数据)时必须显式给;有元数据时用于交叉校验")
     ap.add_argument("--designed_chains", default="index", choices=["index", "mutated"],
                     help="index=照 BindingGYM 的 chain_id(全部链,与 anchor 一致); "
                          "mutated=只把【实际携带突变】的链设为 designed,partner 设 fixed。"
@@ -179,6 +181,14 @@ def main():
         print(f"[skip] {DMS_id} 已存在且 code_stamp 一致"); return
 
     ck = torch.load(a.checkpoint, map_location=dev, weights_only=False)
+    # StaB-ddG 的 stability_finetuned.pt 是【裸 state_dict】,没有 num_edges/noise_level 元数据
+    # (它的 stage1 proteinmpnn.pt 有,为 48/0.2;架构与 ProteinMPNN 118/118 参数名一致、零形状不符)。
+    if "model_state_dict" not in ck:
+        assert a.k_neighbors, "裸 state_dict 必须显式给 --k_neighbors"
+        ck = {"model_state_dict": ck, "num_edges": a.k_neighbors, "noise_level": "n/a"}
+    elif a.k_neighbors:
+        assert ck["num_edges"] == a.k_neighbors, \
+            f"ckpt 的 num_edges={ck['num_edges']} 与 --k_neighbors={a.k_neighbors} 不符"
     atom_ctx = ck["atom_context_num"] if a.model_type == "ligand_mpnn" else 1
     model = ProteinMPNN(node_features=128, edge_features=128, hidden_dim=128,
                         num_encoder_layers=3, num_decoder_layers=3,

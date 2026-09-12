@@ -33,7 +33,7 @@
 | **LigandMPNN** | 两个打分入口（AR / 逐位），但语义与文档相反 | ⚠️ 要选对入口 + 修口径 |
 | **LASErMPNN** | 有打分函数但 **repo 内无人调用**，无 CLI | ⚠️ harness 全自写 |
 | **ADFLIP** | **没有 likelihood head**，原生只有 sampling | ⚠️ 要造 readout |
-| **StaB-ddG** | **物理量 ddG，不是 likelihood** | ⚠️ 口径不同族，需单列 |
+| **StaB-ddG (stage2)** | 与 ProteinMPNN **同架构**，只是权重不同 | ✅ **直接沿用 ProteinMPNN 的 readout**（见 §5.4） |
 
 ⇒ **本工作的主体是 readout 改造**，评测本身反而是最轻的一环。下面逐个交代。
 
@@ -70,7 +70,7 @@ global_score = -mean_over_M(_scores(S, log_probs, mask))
 |---|---|---|
 | **A. AR-NLL** | autoregressive teacher-forced，BindingGYM 官方口径 | ProteinMPNN / LigandMPNN / LASErMPNN |
 | **B. joint-masked** | mask 掉该 variant 的**整组**突变位点，条件于其余全部；`Σ_j[log p(mt_j) − log p(wt_j)]` | **四个模型唯一共同口径**（ADFLIP 只能走这条） |
-| **C. binding ddG** | 物理量 | StaB-ddG |
+| ~~C. binding ddG~~ | ~~物理量~~ | ~~StaB-ddG~~ —— **已放弃**，见 §5.4 |
 
 **为什么必须有 B**：ADFLIP 是 flow matching，出不了 AR-NLL。没有 B，它就无法与任何模型比较。
 
@@ -191,35 +191,58 @@ samples = WT tokens, 突变位点置 <MASK>
 
 ---
 
-### 5.4 StaB-ddG（stage 2）—— 输出根本不是 likelihood
+### 5.4 StaB-ddG（stage 2）—— 不改 readout，只换权重
 
 **为什么用 stage 2**：`model_ckpts/` 三个 ckpt 对应三阶段
 `proteinmpnn.pt`(stage1) → **`stability_finetuned.pt`(stage2, Megascale 稳定性)** →
 `stabddg.pt`(stage3, SKEMPI binding)。
 **stage3 在 SKEMPI 上 finetune 过，而 SKEMPI 与 BindingGYM 的复合物有重叠 ⇒ 用它就是 leakage。**
-stage2 对 binding 是严格 zero-shot。
-防线两道：同步到 ibex 时**物理排除** `output/`（装着全部 stage3 ckpt）；脚本里**断言 ckpt md5**
-`ed2645a2dc380932e50bfafff0fd5a36`。
+防线两道：同步到 ibex 时**物理排除** `output/`（装着全部 stage3 ckpt）；脚本里**断言 ckpt md5**。
 
-**与 ProteinMPNN 的差异**
+#### 关键判断：stage 2 没有改网络结构，所以 readout 应与 ProteinMPNN 完全一致
 
-| # | 差异 | 处理 |
+StaB-ddG 的 binding ddG 是一个**推理期的热力循环构造**
+（complex 的 ddG 减去两个 binder 各自的 ddG），不是模型自带的输出头。
+**stage 2 只是在 Megascale 稳定性数据上 finetune 了 ProteinMPNN 的权重。** 实测验证：
+
+```
+stability_finetuned.pt vs proteinmpnn_v_48_020.pt
+  参数名 118/118 完全一致，形状零不符          ⇒ 架构字面相同
+  权重最大逐元素差 9.087                      ⇒ 确实 finetune 过，不是同一份权重
+```
+
+⇒ **放弃热力循环 readout，改用与 ProteinMPNN 完全相同的 readout（§3）。**
+这样唯一变量只剩**权重本身**，构成一个干净的受控对照，回答的是：
+> 「在 Megascale **稳定性**数据上 finetune，对 **binding** DMS 预测有没有帮助？」
+
+热力循环 readout 会把「模型能力」与「ddG 分解方式」两件事混在一起，
+且引入 chain partition、20-member ensemble、符号约定等一堆与本问题无关的自由度。
+
+#### 对照设计：必须是 stage1 → stage2，不是 anchor → stage2
+
+查证发现 **StaB-ddG 的 base 并不是我们的 anchor 权重**：
+其 `proteinmpnn.pt`（stage1）与 `v_48_020` 的 md5 不同（`698982b1…` vs `91d54c97…`），
+逐元素也有差。所以直接拿 anchor 和 stage2 比，会把「换了个 base checkpoint」
+和「Megascale finetune」两个效应混在一起。
+
+**三点对照**（全部同 readout、同口径、同 25 assay）：
+
+| run | ckpt | 角色 |
 |---|---|---|
-| 1 | 输出**物理量 binding ddG**，不是 log-likelihood | 无法进 A/B 口径 ⇒ 单列为口径 C；因 BindingGYM 的 metric 是 rank-based，仍可进同一张 Spearman 表，但**必须注明机制不同** |
-| 2 | 需要**三个结构**输入：complex + binder1 + binder2 | 用它自带的 `extract_chains()` 从 complex 切出两个 binder |
-| 3 | 需要 **chain partition**（`binder1_binder2`），BindingGYM 没给 | 用重原子接触图（<5 Å）推导并**冻结**成 `refs/chain_partition.tsv`（带 md5 fingerprint），运行时只读不重算 |
-| 4 | 突变串是 SKEMPI 格式，编号是 **`seq_chain_X` 内 1-based 下标**，不是 PDB 残基编号 | 用它自己的 `parse_PDB` 取 `seq_chain_X`，把 BindingGYM 链序列比对上去，按比对下标生成编号 |
-| 5 | **符号约定相反**：`run_stabddg.py` 里 `binding_ddG_pred *= -1`，越负 = 越稳定 | 而 BindingGYM 的指标函数要求 **"越大 = 结合越紧"** ⇒ **汇总时必须取负**，否则 Spearman 整体反号 |
-| 6 | 20-member MC ensemble（`mc_samples=20`），不是单次 forward | 保持官方默认 |
+| `proteinmpnn_*` | `v_48_020`（md5 `91d54c97…`） | benchmark 参照 |
+| `stabddg_s1_*` | StaB-ddG 的 `proteinmpnn.pt`（`698982b1…`） | 控制「base 不同」 |
+| `stabddg_s2_*` | `stability_finetuned.pt`（`ed2645a2…`） | 变量：Megascale finetune |
 
-**差异 3 的结果**：22/25 是两链 ⇒ 平凡。3 个三链 assay 由接触图无歧义解开，
-**且与 assay 命名语义独立吻合**（两条互不依赖的证据）：
+⇒ **Δ(stage2 − stage1) = Megascale finetune 的纯效应。**
 
-| assay | 链(长度) | 最大接触对 | partition |
-|---|---|---|---|
-| `4D5_HER2_1N8Z` | A:214 B:220 C:607 | **A-B:942**（Fab 轻重链配对） | `AB_C` |
-| `5A12_Ang2_4ZFG` | A:220 H:219 L:213 | **H-L:858** | `HL_A` |
-| `5A12_VEGF_4ZFF` | C:96 H:219 L:213 | **H-L:912** | `HL_C` |
+#### 实现上唯一的差异
+stage2 的 ckpt 是**裸 state_dict**，没有 `num_edges` / `noise_level` 元数据
+（stage1 有，为 48 / 0.2）。打分脚本已支持裸 state_dict，并要求显式传 `--k_neighbors 48`；
+ckpt 自带元数据时则做交叉校验，不一致即退出。
+
+> **已放弃的路线（留档）**：先前按热力循环 readout 跑到 10/25，
+> 产物保留在 `stabddg_s2/`（不删除），但**不进入任何结论**。
+> 放弃它的理由见上：stage 2 未改结构，同 readout 才是受控对照。
 
 ---
 

@@ -100,23 +100,24 @@ def main():
         wt_ref = ast.literal_eval(row["wildtype_sequence"])
         order = [c for c in str(chain_ids)] or sorted(wt_ref)
         ref = "".join(wt_ref[c] for c in order)
-        # 🔴 必须【逐链】比对。拼接后整体比对会在两条同源链之间错配 ——
-        #    实测 Z-domain_ZSPA-1_1LP1(链A/B 是同源的 Z-domain 与 affibody)报
-        #    "比对后 WT 仍不符 [(85,'W','K'),(82,'F','Q'),(78,'K','N')]"。
-        ci = batch.chain_indices.cpu().numpy()
+        # 🔴 逐链比对,且链字母必须取自 LASErMPNN 自己的 residue_identifiers。
+        #    此前用 batch.chain_indices 的唯一值顺序去对应 order,假设不成立 ——
+        #    实测 Z-domain_ZSPA-1_1LP1 的错配位从 78/82/85 变成 31/28/24 且残基对正好互换,
+        #    即链 A/B 被对调(LASErMPNN 的解析顺序与 BindingGYM 的 chain_id 顺序无关)。
+        chain_letters = np.array([ri.chain_id for ri in data.residue_identifiers[:len(wt_idx)]])
+        assert len(chain_letters) == len(wt_idx), \
+            f"{DMS_id}: residue_identifiers {len(chain_letters)} != sequence_indices {len(wt_idx)}"
         amap, roff = {}, 0
         for ch in order:
-            # LASErMPNN 的 chain_indices 是按解析顺序编号的整数,取第 idx 个唯一值对应第 idx 条链
-            uniq = sorted(set(ci.tolist()))
-            sel = np.where(ci == uniq[order.index(ch)])[0]
+            sel = np.where(chain_letters == ch)[0]
+            assert len(sel) > 0, f"{DMS_id}: LASErMPNN 解析里没有链 {ch}(有 {sorted(set(chain_letters))})"
             sub = "".join(wt_seq[p] for p in sel)
             for k, v in _align_map(sub, wt_ref[ch]).items():
                 amap[int(sel[k])] = roff + v
             roff += len(wt_ref[ch])
-        mism = [(k, wt_seq[k], ref[v]) for k, v in amap.items() if wt_seq[k] != ref[v] and wt_seq[k] != "X"]
-        assert not mism, f"{DMS_id}: 比对后 WT 仍不符,前 3 处 {mism[:3]}"
-        assert len(amap) >= 0.5 * len(wt_seq), \
-            f"{DMS_id}: 比对只匹配上 {len(amap)}/{len(wt_seq)},映射不可信"
+        mism = [(k, wt_seq[k], ref[v]) for k, v in amap.items()
+                if wt_seq[k] != ref[v] and wt_seq[k] != "X"]
+        assert not mism, f"{DMS_id}: 逐链比对后 WT 仍不符,前 3 处 {mism[:3]}"
         ref2obs = {v: k for k, v in amap.items()}   # 参考下标 -> 观测下标
         if len(wt_seq) != len(ref):
             print(f"  [map] {DMS_id}: LASErMPNN 解析 {len(wt_seq)}/{len(ref)},"

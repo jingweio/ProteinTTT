@@ -14,7 +14,7 @@ score = Σ_j [ log p(mt_j) − log p(wt_j) ]，与其余三个模型的口径 B 
 【成本】masked 上下文只取决于位点集合、与替换成哪个 AA 无关 ⇒ 同一位点组合的所有 variant
 共享一次 forward。全库 32,977 个 distinct 组合 vs 376,446 个 variant，约 11.4× 便宜。
 """
-import argparse, ast, os, sys, time
+import argparse, ast, itertools, os, sys, time
 import numpy as np, pandas as pd, torch
 
 
@@ -32,6 +32,24 @@ class Config:
     def to_dict(self):
         return {k: (v.to_dict() if isinstance(v, Config) else v)
                 for k, v in self.__dict__.items()}
+
+
+def _align_map(obs, ref):
+    """NW 比对,返回 {obs_idx: ref_idx}。与 score_bgym_mpnn.py 同一实现。"""
+    n, m = len(obs), len(ref)
+    D = np.zeros((n + 1, m + 1), dtype=np.int32)
+    D[:, 0] = -np.arange(n + 1); D[0, :] = -np.arange(m + 1)
+    for i in range(1, n + 1):
+        oi = obs[i - 1]
+        for j in range(1, m + 1):
+            D[i, j] = max(D[i-1, j-1] + (1 if oi == ref[j-1] else -1), D[i-1, j] - 1, D[i, j-1] - 1)
+    i, j, out = n, m, {}
+    while i > 0 and j > 0:
+        if D[i, j] == D[i-1, j-1] + (1 if obs[i-1] == ref[j-1] else -1):
+            out[i-1] = j-1; i -= 1; j -= 1
+        elif D[i, j] == D[i-1, j] - 1: i -= 1
+        else: j -= 1
+    return out
 
 
 def build_model(repo, ckpt_path, device):
@@ -98,16 +116,43 @@ def main():
         wt_tok = data["residue_token"][des].clone()
         wt_seq = "".join(restype_3to1.get(index_to_token[int(i)], "X") for i in wt_tok)
 
-        # 🔴 硬校验：ADFLIP 解析出的 WT 必须与 BindingGYM 的 wildtype_sequence 拼接一致。
-        #    这同时【建立了】位点索引映射 —— 对不上就 assert，绝不静默错位。
+        # 🔴 ADFLIP 的 parser 残基集合与 BindingGYM 不同(实测 4D5_HER2 1015 vs 1041 ——
+        #    它丢掉 backbone 不完整的残基),所以不能要求数量相等。
+        #    另:pdb2data 只保留 ndarray 字段,链【字母】丢失,只剩数值型 data["chain_id"]。
+        #    ⇒ 按链块切分 + 试所有排列,取错配最少的指派;再逐块 NW 比对建映射。
         wt_ref = ast.literal_eval(row["wildtype_sequence"])
         order = [c for c in str(chain_ids)] or sorted(wt_ref)
         ref = "".join(wt_ref[c] for c in order)
-        assert len(wt_seq) == len(ref), f"{DMS_id}: ADFLIP 解析 {len(wt_seq)} 残基 vs BindingGYM {len(ref)}"
-        bad = [(k, wt_seq[k], ref[k]) for k in range(len(ref)) if wt_seq[k] != ref[k] and wt_seq[k] != "X"]
-        assert not bad, f"{DMS_id}: WT 不符，前 3 处 {bad[:3]}"
-        off = {}; p = 0
-        for c in order: off[c] = p; p += len(wt_ref[c])
+        roff = {}; _p = 0
+        for c in order: roff[c] = _p; _p += len(wt_ref[c])
+
+        cid = data["chain_id"][des].cpu().numpy()
+        seen, blocks = [], []
+        for v in cid.tolist():
+            if v not in seen: seen.append(v)
+        for v in seen: blocks.append(np.where(cid == v)[0])
+        assert len(blocks) == len(order), \
+            f"{DMS_id}: ADFLIP 解析出 {len(blocks)} 条链,BindingGYM 有 {len(order)} 条"
+
+        best = None
+        for perm in itertools.permutations(range(len(order))):
+            amap, mis = {}, 0
+            for bi, pi in enumerate(perm):
+                ch = order[pi]; sel = blocks[bi]
+                sub = "".join(wt_seq[p] for p in sel)
+                am = _align_map(sub, wt_ref[ch])
+                mis += sum(1 for k, v in am.items() if sub[k] != wt_ref[ch][v] and sub[k] != "X")
+                mis += (len(wt_ref[ch]) - len(am))        # 未匹配上的也计入代价
+                for k, v in am.items(): amap[int(sel[k])] = roff[ch] + v
+            if best is None or mis < best[0]: best = (mis, amap, perm)
+        nmis, amap, perm = best
+        bad = [(k, wt_seq[k], ref[v]) for k, v in amap.items()
+               if wt_seq[k] != ref[v] and wt_seq[k] != "X"]
+        assert not bad, f"{DMS_id}: 最优指派下 WT 仍不符,前 3 处 {bad[:3]}"
+        assert len(amap) >= 0.5 * len(ref), f"{DMS_id}: 只映射上 {len(amap)}/{len(ref)},不可信"
+        ref2obs = {v: k for k, v in amap.items()}
+        print(f"  [map] {DMS_id}: ADFLIP 解析 {len(wt_seq)}/{len(ref)}, 链块指派 {perm}, "
+              f"映射 {len(amap)} 个位点(未映射位不参与打分)")
 
         tok_of = {}   # 1-letter AA -> ADFLIP token id
         for t_, i_ in residue_tokens.items():
@@ -118,20 +163,23 @@ def main():
         for i in g.index:
             mseq = ast.literal_eval(g.loc[i, "mutated_sequence"])
             mut_full = "".join(mseq[c] for c in order)
-            diff = [k for k in range(len(ref)) if mut_full[k] != ref[k]]
-            key = tuple(diff)
+            # diff 用【观测坐标】,未映射到结构的突变位点直接跳过
+            diff = [ref2obs[k] for k in range(len(ref))
+                    if mut_full[k] != ref[k] and k in ref2obs]
+            key = tuple(sorted(diff))
             if key not in cache:
                 samples = wt_tok.clone().unsqueeze(0)
-                for k in diff: samples[0, k] = MASK
+                for o in diff: samples[0, o] = MASK
                 with torch.no_grad():
                     _, noisy = model.corrupt_data_by_sample(dict(data), a.t, samples[0])
                     logits, _ = model.model(noisy, torch.tensor([[a.t]], device=dev))
                 lp = torch.log_softmax(logits.view(-1, logits.shape[-1]).float(), dim=-1)
-                cache[key] = {k: lp[k].cpu().numpy() for k in diff}
-            c_ = cache[key]
+                cache[key] = {o: lp[o].cpu().numpy() for o in diff}
+            c_ = cache[key]; obs2ref = {v: k for k, v in ref2obs.items()}
             s = 0.0
-            for k in diff:
-                s += float(c_[k][tok_of[mut_full[k]]] - c_[k][tok_of[ref[k]]])
+            for o in diff:
+                k = obs2ref[o]
+                s += float(c_[o][tok_of[mut_full[k]]] - c_[o][tok_of[ref[k]]])
             scores.append(s)
 
         g = g.copy(); g["adflip_score"] = scores

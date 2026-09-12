@@ -103,7 +103,11 @@ def main():
     ap.add_argument("--tau", type=float, default=5.0)
     ap.add_argument("--agg", default="max")
     ap.add_argument("--mode", default="decoder")
-    ap.add_argument("--M", type=int, default=5)
+    ap.add_argument("--M", type=int, default=5, help="decoding orders for the FINAL evaluation")
+    ap.add_argument("--sweep_M", type=int, default=None,
+                    help="cheaper M for the sweep itself; the best lambda is re-evaluated at --M. "
+                         "The sweep only needs the SHAPE of the curve; only the number that gets "
+                         "compared to the 0.4850 bar needs the baseline's M=5.")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--permute_d", action="store_true", help="E-3 null: shuffle d within assay")
     ap.add_argument("--tag", default="e1")
@@ -115,9 +119,17 @@ def main():
     lab = pd.read_parquet(f"{ROOT}/local-records/binding-sites-analysis-pred/data/variant_labels_with_mpnn.parquet")
 
     rows, curves, preds = [], [], {}
+    suf = "_null" if a.permute_d else ""
+    csv_path = f"{OUT}/{a.tag}_lambda_sweep{suf}.csv"
+
+    def flush():
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        pd.DataFrame(curves).to_csv(f"{OUT}/{a.tag}_loss_curves{suf}.csv", index=False)
+        np.savez_compressed(f"{OUT}/{a.tag}_preds{suf}.npz", **preds)
+
     for dms in a.assays:
         t0 = time.time()
-        ctx, S, df = build(dms, model, a.M, a.seed, dev)
+        ctx, S, df = build(dms, model, a.sweep_M or a.M, a.seed, dev)
         bs_eff = max(8, min(a.bs, int(3.0e8 / (ctx.L * 48 * 256))))
         sf = frozen_scores(ctx, S, bs_eff)
 
@@ -140,7 +152,7 @@ def main():
             f"{dms}: keep {len(keep)} y {len(y)} w {len(w_var)}"
         S_v, sf_v = S[keep], sf[keep]
         base = float(np.mean([spearman(sf_v[:, m].numpy(), y) for m in range(a.M)]))
-        base5 = spearman(sf_v.mean(1).numpy(), y)
+        base5 = spearman(lab[lab.DMS_id == dms].mpnn_score.to_numpy(float), y)  # official seed1/M=5
 
         if a.permute_d:
             w_var = w_var[np.random.default_rng(a.seed).permutation(len(w_var))]
@@ -157,15 +169,29 @@ def main():
                              ds_rms=float(np.sqrt(((sc - sf_v.mean(1).numpy()) ** 2).mean()))))
             preds[f"{dms}|{lam}"] = sc
             print(f"{dms:38s} lam={lam:<6g} rho={rho:.4f} (base {base5:.4f}, "
-                  f"{rho-base5:+.4f})  corr(w,s) {rows[-1]['corr_w_before']:+.3f}->{corr_w:+.3f}")
+                  f"{rho-base5:+.4f})  corr(w,s) {rows[-1]['corr_w_before']:+.3f}->{corr_w:+.3f}",
+                  flush=True)
+            flush()          # one assay dying must not cost the assays already finished
         curves += log
-        print(f"  [{dms}] L={ctx.L} n={len(keep)} bs={bs_eff} M={a.M} "
-              f"base(M=1 mean) {base:.4f} base(M=5) {base5:.4f}  {time.time()-t0:.0f}s")
+        if a.sweep_M:        # re-score the winner at the evaluation M
+            best_lam = max((r for r in rows if r["DMS_id"] == dms), key=lambda r: r["rho"])["lam"]
+            ctx.M = a.M
+            ctx._build_encoder_cache()
+            sc = run_one(ctx, S_v, w_var, y, frozen_scores(ctx, S_v, bs_eff), best_lam,
+                         a.lr, a.steps, bs_eff, a.mode, dev, a.seed)
+            preds[f"{dms}|{best_lam}|M{a.M}"] = sc
+            rows.append(dict(DMS_id=dms, lam=best_lam, rho=spearman(sc, y), rho_base=base5,
+                             gain=spearman(sc, y) - base5, corr_w_after=float(np.corrcoef(w_var, sc)[0, 1]),
+                             corr_w_before=float(np.corrcoef(w_var, sf_v.mean(1).numpy())[0, 1]),
+                             ds_rms=float(np.sqrt(((sc - sf_v.mean(1).numpy()) ** 2).mean())),
+                             final_M=a.M))
+            print(f"{dms:38s} lam*={best_lam:<6g} FINAL M={a.M} rho={rows[-1]['rho']:.4f} "
+                  f"({rows[-1]['gain']:+.4f})", flush=True)
+        flush()
+        print(f"  [{dms}] L={ctx.L} n={len(keep)} bs={bs_eff} sweepM={a.sweep_M or a.M} "
+              f"base(M=5) {base5:.4f}  {time.time()-t0:.0f}s", flush=True)
 
-    t = pd.DataFrame(rows); suf = "_null" if a.permute_d else ""
-    t.to_csv(f"{OUT}/{a.tag}_lambda_sweep{suf}.csv", index=False)
-    pd.DataFrame(curves).to_csv(f"{OUT}/{a.tag}_loss_curves{suf}.csv", index=False)
-    np.savez_compressed(f"{OUT}/{a.tag}_preds{suf}.npz", **preds)
+    flush(); t = pd.DataFrame(rows)
     print("\n=== lambda sweep ===")
     print(t.pivot_table(index="lam", columns="DMS_id", values="gain")
           .to_string(float_format=lambda x: f"{x:+.4f}"))

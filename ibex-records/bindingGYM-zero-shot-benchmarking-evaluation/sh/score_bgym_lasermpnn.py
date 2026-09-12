@@ -100,7 +100,19 @@ def main():
         wt_ref = ast.literal_eval(row["wildtype_sequence"])
         order = [c for c in str(chain_ids)] or sorted(wt_ref)
         ref = "".join(wt_ref[c] for c in order)
-        amap = _align_map(wt_seq, ref)              # obs_idx -> ref_idx
+        # 🔴 必须【逐链】比对。拼接后整体比对会在两条同源链之间错配 ——
+        #    实测 Z-domain_ZSPA-1_1LP1(链A/B 是同源的 Z-domain 与 affibody)报
+        #    "比对后 WT 仍不符 [(85,'W','K'),(82,'F','Q'),(78,'K','N')]"。
+        ci = batch.chain_indices.cpu().numpy()
+        amap, roff = {}, 0
+        for ch in order:
+            # LASErMPNN 的 chain_indices 是按解析顺序编号的整数,取第 idx 个唯一值对应第 idx 条链
+            uniq = sorted(set(ci.tolist()))
+            sel = np.where(ci == uniq[order.index(ch)])[0]
+            sub = "".join(wt_seq[p] for p in sel)
+            for k, v in _align_map(sub, wt_ref[ch]).items():
+                amap[int(sel[k])] = roff + v
+            roff += len(wt_ref[ch])
         mism = [(k, wt_seq[k], ref[v]) for k, v in amap.items() if wt_seq[k] != ref[v] and wt_seq[k] != "X"]
         assert not mism, f"{DMS_id}: 比对后 WT 仍不符,前 3 处 {mism[:3]}"
         assert len(amap) >= 0.5 * len(wt_seq), \

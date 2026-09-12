@@ -50,15 +50,16 @@ def build_model(repo, ckpt_path, device):
         num_positional_embeddings=z.num_positional_embeddings, num_rbf=z.num_rbf,
         augment_eps=z.augment_eps, backbone_diheral=z.backbone_diheral, dropout=z.dropout,
         update_atom=z.update_atom, num_decoder_blocks=z.num_decoder_blocks,
-        num_tfmr_heads=z.num_tfmr_heads, num_tfmr_layers=z.num_tfmr_layers)
-    m = DiscreteFlow_AA(cfg, den)
-    sd = ck.get("ema_model", ck.get("model", ck.get("state_dict", ck)))
-    if isinstance(sd, dict) and "state_dict" in sd: sd = sd["state_dict"]
-    missing, unexpected = m.load_state_dict(
-        {k.replace("ema_model.", "").replace("online_model.", ""): v
-         for k, v in sd.items()}, strict=False)
-    print(f"  load_state_dict: missing={len(missing)} unexpected={len(unexpected)}")
-    assert len(missing) < 20, f"权重加载明显不对,missing={missing[:10]}"
+        num_tfmr_heads=z.num_tfmr_heads, num_tfmr_layers=z.num_tfmr_layers,
+        # 🔴 这三个是必须的:output_dim 决定输出词表大小(ckpt 是 33,漏传会退到默认 20
+        #    并报 "size mismatch for model.layers.output.weight [33,128] vs [20,128]")。
+        #    构造参数逐字对齐 ADFLIP/test/benchmark.py:248-266。
+        number_ligand_atom=z.number_ligand_atom, mpnn_cutoff=z.mpnn_cutoff,
+        output_dim=z.output_dim)
+    # sidechain_packing=False:我们只要 logits,不做侧链重建(避免加载 PIPPack 权重)
+    m = DiscreteFlow_AA(cfg, den, min_t=0.0, sidechain_packing=False)
+    m.load_state_dict(ck["model"])        # 与 benchmark.py 一致:严格加载 ckpt["model"]
+    print(f"  权重严格加载成功;output_dim={z.output_dim}")
     return m.to(device).eval(), cfg
 
 

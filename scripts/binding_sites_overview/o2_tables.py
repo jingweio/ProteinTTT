@@ -6,9 +6,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from bg_common import OUT_DIR, REC_DIR
 
 PRED = os.path.normpath(os.path.join(REC_DIR, "..", "binding-sites-analysis-pred"))
+EXCL = ["KRAS_DARPinK27_norfitness_5O2S", "KRAS_SOS1_norfitness_8BE4"]   # 23-assay basis
 a = pd.read_csv(f"{OUT_DIR}/assay_summary.csv")
+a = a[~a.DMS_id.isin(EXCL)]
 sites = pd.read_csv(f"{OUT_DIR}/binding_sites_per_chain.csv")
 cmp_ = pd.read_csv(f"{PRED}/data/stats_dms_vs_mpnn.csv")
+cmp_ = cmp_[~cmp_.DMS_id.isin(EXCL)]
 f = lambda x, n=3: "—" if pd.isna(x) else f"{x:.{n}f}"
 sg = lambda x, n=3: "—" if pd.isna(x) else f"{x:+.{n}f}"
 

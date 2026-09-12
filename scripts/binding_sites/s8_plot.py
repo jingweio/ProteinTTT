@@ -23,11 +23,20 @@ mpl.rcParams.update({
     "xtick.major.size": 2.5, "ytick.major.size": 2.5,
 })
 C_IFACE, C_NON = "#B64342", "#0F4D92"          # signal family / neutral-baseline family
+# Inputs always come from this record; only the assay basis and the output location
+# can be overridden, so another record can render the same figure on its own basis.
+#   ASSAY_EXCLUDE="a,b"   FIG_OUT_DIR=/path   FIG_SUFFIX=_23
 D = REC_DIR
+OUT_FIG = os.environ.get("FIG_OUT_DIR", REC_DIR)
+SUFFIX = os.environ.get("FIG_SUFFIX", "")
+EXCL = set(x for x in os.environ.get("ASSAY_EXCLUDE", "").split(",") if x)
+
 v = pd.read_parquet(f"{D}/data/variant_labels.parquet")
 st = pd.read_csv(f"{D}/data/stats_iface_vs_noniface_extended.csv")
 wt = pd.read_csv(f"{D}/data/wt_reference.csv").set_index("DMS_id")["wt_score"].to_dict()
+v = v[~v.DMS_id.isin(EXCL)]; st = st[~st.DMS_id.isin(EXCL)]
 order = list(st.sort_values(["testable", "cliffs_delta"], ascending=[False, True]).DMS_id)
+print(f"{len(order)} assays" + (f"  (excluded {len(EXCL)})" if EXCL else ""))
 
 fig, axes = plt.subplots(5, 5, figsize=(13.2, 12.4))
 for ax, dms in zip(axes.ravel(), order):
@@ -89,8 +98,8 @@ fig.text(.5, .0005, "OVL = overlap coefficient (1 = identical distributions)  ·
                     "x-axis clipped to the 0.5-99.5 percentile, then widened so the WT anchor is always inside  ·  3 assays ship no WT row",
          ha="center", fontsize=7.5, color="#4D4D4D")
 fig.tight_layout(rect=[0, .028, 1, .985])
-fig.savefig(f"{D}/fig_dms_distribution_by_interface.png", dpi=300, bbox_inches="tight")
+fig.savefig(f"{OUT_FIG}/fig_dms_distribution_by_interface{SUFFIX}.png", dpi=300, bbox_inches="tight")
 # CreationDate=None keeps the PDF byte-reproducible across reruns
-fig.savefig(f"{D}/fig_dms_distribution_by_interface.pdf", bbox_inches="tight",
+fig.savefig(f"{OUT_FIG}/fig_dms_distribution_by_interface{SUFFIX}.pdf", bbox_inches="tight",
             metadata={"CreationDate": None})
 print("saved PNG + PDF")

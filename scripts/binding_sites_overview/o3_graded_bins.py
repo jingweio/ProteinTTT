@@ -21,7 +21,14 @@ OUT = os.path.normpath(os.path.join(REC_DIR, "..", "binding-sites-overview"))
 K, MIN_PER_BIN = 5, 30
 EXCL_FOR_TTT = {"KRAS_DARPinK27_norfitness_5O2S", "KRAS_SOS1_norfitness_8BE4"}
 
+
 v = pd.read_parquet(f"{PRED}/data/variant_labels_with_mpnn.parquet")
+# Population for this section is the 14-assay working set: the 23 that are label-clean,
+# restricted to those where the binary split of sections 4/5 is defined, so the graded
+# view is directly comparable with them and with the complexTTT record.
+_st = pd.read_csv(f"{PRED}/data/stats_dms_vs_mpnn.csv")
+SET14 = sorted(set(_st[_st.testable].DMS_id) - EXCL_FOR_TTT)
+v = v[v.DMS_id.isin(SET14)]
 
 def eta2(y, lab):
     tot = np.var(y)
@@ -78,14 +85,14 @@ t.to_csv(f"{OUT}/data/graded_bins_per_assay.csv", index=False)
 pb.to_csv(f"{OUT}/data/graded_bins_per_bin.csv", index=False)
 pd.set_option("display.width", 300)
 
-print(f"=== 口径：K={K} 分位档（按 d），要求 >=3 档且每档 >=%d ===" % MIN_PER_BIN)
-print(f"  25 个 assay 中可用: {int(t.usable.sum())}   不可用: {int((~t.usable).sum())}")
+print(f"=== 口径：14-assay 工作集；K={K} 分位档（按 d），要求 >=3 档且每档 >=%d ===" % MIN_PER_BIN)
+print(f"  14 个中可用: {int(t.usable.sum())}   不可用: {int((~t.usable).sum())}")
 if (~t.usable).any():
     print(t[~t.usable][["DMS_id", "n", "n_bins", "min_bin_n", "n_unique_d"]].to_string(index=False))
 u = t[t.usable]
-print(f"\n=== 逐 assay（可用 {len(u)} 个；★ = complexTTT 阶段排除的那两个） ===")
-uu = u.copy(); uu["★"] = np.where(uu.excluded_for_ttt, "★", "")
-print(uu[["★", "DMS_id", "n", "n_bins", "rho_bin_dms", "rho_bin_mpnn",
+print(f"\n=== 逐 assay（可用 {len(u)} 个） ===")
+uu = u.copy()
+print(uu[["DMS_id", "n", "n_bins", "rho_bin_dms", "rho_bin_mpnn",
           "eta2_bin_dms", "eta2_bin_mpnn", "mono_dms", "mono_mpnn"]]
       .sort_values("rho_bin_dms").to_string(index=False, float_format=lambda x: f"{x:+.3f}"))
 print(f"\n=== 汇总（{len(u)} 个可用 assay） ===")

@@ -58,7 +58,8 @@ fig.savefig(f"{OUT}/fig_graded_bins_trend.png", dpi=300, bbox_inches="tight")
 fig.savefig(f"{OUT}/fig_graded_bins_trend.pdf", bbox_inches="tight", metadata={"CreationDate": None})
 
 # ---------- Figure 6: per-assay distributions ----------
-fig, axes = plt.subplots(4, 4, figsize=(13.0, 10.4))
+nrow = int(np.ceil(len(order) / 4))
+fig, axes = plt.subplots(nrow, 4, figsize=(13.0, 2.6 * nrow))
 for ax, a in zip(axes.ravel(), order):
     g = v[v.DMS_id == a]
     d = g.min_dist_to_partner.to_numpy(float); y = g.DMS_score.to_numpy(float)
@@ -71,8 +72,7 @@ for ax, a in zip(axes.ravel(), order):
                 color=RAMP(i / max(nb - 1, 1)), lw=1.5, zorder=2 + i)
         ax.axvline(np.median(y[s]), color=RAMP(i / max(nb - 1, 1)), lw=1, ls=(0, (3, 2)), zorder=6)
     r = t[t.DMS_id == a].iloc[0]
-    ax.set_title(SHORT[a] + ("  ★" if bool(r.excluded_for_ttt) else ""), fontsize=8.5, pad=3,
-                 color="#767676" if bool(r.excluded_for_ttt) else "black")
+    ax.set_title(SHORT[a], fontsize=8.5, pad=3)
     ax.text(.975, .96, f"$\\rho_{{bin}}$ = {r.rho_bin_dms:+.3f}\n$\\eta^2$ = {r.eta2_bin_dms:.3f}\nK = {nb}",
             transform=ax.transAxes, ha="right", va="top", fontsize=6.8, color="#272727", linespacing=1.35)
     ax.set_yticks([]); ax.spines["left"].set_visible(False)
@@ -84,7 +84,7 @@ cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=.018, pad=.045
 cb.set_ticks([0, 1]); cb.set_ticklabels(["B1  farthest from the other entity", "B5  closest"])
 cb.ax.tick_params(labelsize=8)
 fig.suptitle("Measured DMS_score by graded binding-site bin — one panel per assay, panels sorted by "
-             "$\\rho_{bin}$  (★ = excluded from the complexTTT working set)", fontsize=10.5, y=.995)
+             "$\\rho_{bin}$", fontsize=10.5, y=.995)
 fig.savefig(f"{OUT}/fig_graded_bins_per_assay.png", dpi=300, bbox_inches="tight")
 fig.savefig(f"{OUT}/fig_graded_bins_per_assay.pdf", bbox_inches="tight", metadata={"CreationDate": None})
 print("saved both figures")

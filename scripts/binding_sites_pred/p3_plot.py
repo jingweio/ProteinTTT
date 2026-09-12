@@ -18,10 +18,15 @@ mpl.rcParams.update({
 })
 C_IFACE, C_NON = "#B64342", "#0F4D92"
 PRED = os.path.normpath(os.path.join(REC_DIR, "..", "binding-sites-analysis-pred"))
+OUT_FIG = os.environ.get("FIG_OUT_DIR", PRED)
+SUFFIX = os.environ.get("FIG_SUFFIX", "")
+EXCL = set(x for x in os.environ.get("ASSAY_EXCLUDE", "").split(",") if x)
 
 v = pd.read_parquet(f"{PRED}/data/variant_labels_with_mpnn.parquet")
 st = pd.read_csv(f"{PRED}/data/stats_dms_vs_mpnn.csv")
+v = v[~v.DMS_id.isin(EXCL)]; st = st[~st.DMS_id.isin(EXCL)]
 order = list(st.sort_values(["testable", "cliffs_delta_dms"], ascending=[False, True]).DMS_id)
+print(f"{len(order)} assays" + (f"  (excluded {len(EXCL)})" if EXCL else ""))
 
 fig, axes = plt.subplots(5, 5, figsize=(13.2, 12.4))
 for ax, dms in zip(axes.ravel(), order):
@@ -70,7 +75,7 @@ fig.text(.5, .0005, "vertical lines = group medians  ·  OVL = overlap coefficie
                     "  ·  a group with n < 10 is not drawn  ·  x-axis clipped to the 0.5-99.5 percentile",
          ha="center", fontsize=7.5, color="#4D4D4D")
 fig.tight_layout(rect=[0, .028, 1, .985])
-fig.savefig(f"{PRED}/fig_mpnn_distribution_by_interface.png", dpi=300, bbox_inches="tight")
-fig.savefig(f"{PRED}/fig_mpnn_distribution_by_interface.pdf", bbox_inches="tight",
+fig.savefig(f"{OUT_FIG}/fig_mpnn_distribution_by_interface{SUFFIX}.png", dpi=300, bbox_inches="tight")
+fig.savefig(f"{OUT_FIG}/fig_mpnn_distribution_by_interface{SUFFIX}.pdf", bbox_inches="tight",
             metadata={"CreationDate": None})
 print("saved PNG + PDF")

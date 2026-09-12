@@ -11,7 +11,12 @@ mpl.rcParams.update({"font.family": "sans-serif", "font.sans-serif": ["Arial", "
                      "axes.spines.right": False, "axes.spines.top": False,
                      "axes.linewidth": .8, "legend.frameon": False})
 PRED = os.path.normpath(os.path.join(REC_DIR, "..", "binding-sites-analysis-pred"))
+OUT_FIG = os.environ.get("FIG_OUT_DIR", PRED)
+SUFFIX = os.environ.get("FIG_SUFFIX", "")
+EXCL = set(x for x in os.environ.get("ASSAY_EXCLUDE", "").split(",") if x)
 t = pd.read_csv(f"{PRED}/data/stats_dms_vs_mpnn.csv").query("testable")
+t = t[~t.DMS_id.isin(EXCL)]
+print(f"{len(t)} assays" + (f"  (excluded {len(EXCL)})" if EXCL else ""))
 t["is_kras"] = t.DMS_id.str.startswith("KRAS")
 C_K, C_O, C_BAD = "#B64342", "#0F4D92", "#F6CFCB"      # A: KRAS / other / sign-flip band
 C_MEAS, C_PRED  = "#272727", "#42949E"                  # B: measurement / prediction
@@ -92,6 +97,6 @@ fig.suptitle("BindingGYM — the binding-site contrast the DMS measures is not t
 fig.text(.5, -.035, "$\\delta$ < 0 = variants touching a binding site score lower.  ProteinMPNN: zero-shot "
                     "global_score, seed1 / M=5, scored on the WT complex.  Binding site = heavy atom within "
                     "5 Å of a never-mutated partner chain.", ha="center", fontsize=7.4, color="#4D4D4D")
-fig.savefig(f"{PRED}/fig_dms_vs_mpnn_contrast.png", dpi=300, bbox_inches="tight")
-fig.savefig(f"{PRED}/fig_dms_vs_mpnn_contrast.pdf", bbox_inches="tight", metadata={"CreationDate": None})
+fig.savefig(f"{OUT_FIG}/fig_dms_vs_mpnn_contrast{SUFFIX}.png", dpi=300, bbox_inches="tight")
+fig.savefig(f"{OUT_FIG}/fig_dms_vs_mpnn_contrast{SUFFIX}.pdf", bbox_inches="tight", metadata={"CreationDate": None})
 print("saved")

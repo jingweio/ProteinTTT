@@ -42,6 +42,7 @@ for ax, col, lab in ((axes[0], "dms_meanrank", "measured DMS_score"),
     ax.set_xticks([0, .25, .5, .75, 1])
     ax.set_xticklabels(["B1\nfarthest", "B2", "B3", "B4", "B5\nclosest"], fontsize=7.5)
     ax.set_ylim(.2, .8); ax.set_ylabel("bin mean rank of the score  (0.5 = no effect)", fontsize=8.5)
+    ax.set_xlabel("binding-site bin  (B1 farthest $\\rightarrow$ B5 closest)", fontsize=8.5)
     ax.set_title(f"{'A' if col.startswith('dms') else 'B'}   {lab}", fontsize=9.5, loc="left", pad=8)
     ax.legend(loc="lower left", fontsize=7.5)
     ax.text(.98, .96, f"median: {med[0]:.3f} at B1  $\\rightarrow$  {med[-1]:.3f} at B5"
@@ -60,7 +61,7 @@ fig.savefig(f"{OUT}/fig_graded_bins_trend.pdf", bbox_inches="tight", metadata={"
 # ---------- Figure 6: per-assay distributions ----------
 nrow = int(np.ceil(len(order) / 4))
 fig, axes = plt.subplots(nrow, 4, figsize=(13.0, 2.6 * nrow))
-for ax, a in zip(axes.ravel(), order):
+for idx, (ax, a) in enumerate(zip(axes.ravel(), order)):
     g = v[v.DMS_id == a]
     d = g.min_dist_to_partner.to_numpy(float); y = g.DMS_score.to_numpy(float)
     ok = np.isfinite(d) & np.isfinite(y); d, y = d[ok], y[ok]
@@ -77,6 +78,9 @@ for ax, a in zip(axes.ravel(), order):
             transform=ax.transAxes, ha="right", va="top", fontsize=6.8, color="#272727", linespacing=1.35)
     ax.set_yticks([]); ax.spines["left"].set_visible(False)
     ax.tick_params(axis="x", labelsize=6.5); ax.set_xlim(lo, hi); ax.margins(y=.62)
+    ax.set_xlabel("measured DMS_score", fontsize=7)
+    if idx % 4 == 0:
+        ax.set_ylabel("density  (area = 1 per bin)", fontsize=7)
 for ax in axes.ravel()[len(order):]:
     ax.axis("off")
 sm = plt.cm.ScalarMappable(cmap=RAMP, norm=mpl.colors.Normalize(0, 1))

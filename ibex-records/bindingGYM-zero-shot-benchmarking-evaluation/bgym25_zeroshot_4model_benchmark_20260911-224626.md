@@ -203,6 +203,9 @@ CUDA：Ibex a100 节点驱动为 CUDA 12.x ⇒ 所有 torch wheel **不得跨到
 - 2026-09-12 05:0x · P1 全量 25/25;发现侧链 flag 无作用对象,加 --designed_chains mutated 重跑。
 - 2026-09-12 13:4x · 侧链对比出结果(+0.0082, p=0.0158,含 4 个零差异内部对照,见 §17)。
 - 2026-09-12 14:2x · 补记 §17-§20:吞吐/walltime 策略、P2-P4 的失败与修复、五类 parser 残基集合差异。
+- 2026-09-12 16:5x · 抓到假结果:lasermpnn_jm 的 0.3614 是新旧代码混合产物(23/25 用修复前代码)。
+  根因是幂等跳过不校验代码版本。已加 code_stamp、作废 LASErMPNN 全部结果并重跑;
+  逐个查证其余 run 未受影响(§21)。
   ⚠️ 本次补记前,约 6 小时的进展只在 commit message 里、未进文档正文 —— 已纠正。
   探针纠正了 joint_masked 的解码序方向(原写法得到的是 backbone-only)。P1 五个 config 已提交。
   失败传播(坏 job 曾伪装成 COMPLETED);parse_atoms_with_zero_occupancy=True(BindingGYM 结构 occ 全为 0,
@@ -545,3 +548,59 @@ BindingGYM 的序列约定天然对齐。已遇到五类：
 - per-variant 分数：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/scores/{run_id}/{DMS_id}.csv`
 - StaB-ddG：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/stabddg_s2/{DMS_id}/output/`
 - 逐 assay 指标 + leaderboard（已回流进 repo）：`ibex-records/{project}/results/`
+
+## 21. 🔴 一次差点写进结论的假结果 —— 幂等跳过 + 改代码 = 旧坏结果被静默保留
+
+### 21.1 症状
+`lasermpnn_jm` 跑出 25/25、job `COMPLETED`，聚合 Spearman = **0.361365**。
+差点就作为「LASErMPNN 弱于 ProteinMPNN」写进结论。
+
+### 21.2 是怎么被抓住的
+汇报前算配对检验时，`Wilcoxon p = nan` —— 顺着 nan 查下去：
+
+| assay | 现象 |
+|---|---|
+| `KRAS_SOS1_8BE4` | **19,425 个分数全部恰好为 0**，uniq=1，Spearman=NaN、AUC=0.5、MCC=0 |
+| `KRAS_PICK3CG-RBD_1HE8` | 19,203 个里 **18,651 个为 0**（97%），Spearman −0.0136（ProteinMPNN 0.5055） |
+| 对照 `proteinmpnn_mm` | 同两个 assay uniq=19,423 / 19,202，std≈2.8（正常） |
+
+分数恒为 0 ⇒ 该 variant 的突变位点**一个都没映射上**（`diff` 为空）。
+
+### 21.3 根因
+**不是算法错。** 直接测比对函数：`KRAS_SOS1` 链 R 映射 165/165 零错配、链 S 440/440 零错配，
+合计 605 —— 完全正常。
+
+真正原因是**时间戳**：25 个 csv 里 **23 个写于 14:43 的链映射修复【之前】**，
+只有 2 个 Z-domain 用了新代码。打分脚本是幂等的（输出已存在即跳过），
+所以修复后的重跑**只补上了之前失败的 2 个，把 23 个坏的静默留下**，job 却报 `COMPLETED 25/25`。
+
+### 21.4 持久性修复：code_stamp
+仅仅重跑一次不够 —— 这个坑会在每次改脚本后复发。已给三个打分脚本加**代码版本戳**：
+
+```python
+def _code_stamp():                      # 脚本自身的 md5(前 12 位)
+    return hashlib.md5(open(__file__,'rb').read()).hexdigest()[:12]
+
+def _should_skip(out_csv, stamp):       # 跳过的判据从「文件存在」改为「戳一致」
+    old = pd.read_csv(out_csv, nrows=1)
+    return "code_stamp" in old.columns and str(old["code_stamp"][0]) == stamp
+```
+每个输出 csv 带 `code_stamp` 列；戳不一致就打印 `[restale]` 并重算。
+
+### 21.5 波及范围核查（逐个查证，不假设）
+- `lasermpnn_jm` / `lasermpnn_ar`：**全部作废**，移到 `scores/lasermpnn_*_STALE_prefix_*`（留证），已重跑。
+- `stabddg_s2`：此前因编号问题已整体作废（§19.3），不叠加。
+- **5 个主 MPNN run**：csv 全部早于 `score_bgym_mpnn.py` 的 05:09 修改。
+  查证那次改动（加 `--designed_chains`）的 diff：`index` 分支那行
+  `designed = [c for c in str(chain_ids)] if str(chain_ids) else sorted(set(letters))`
+  与被替换的行**逐字相同** ⇒ 对这 5 个 run（都用 `index` 模式）**行为未变，结果有效**。
+- `ligandmpnn_ar_scfix` / `_noscfix`：全部晚于该修改，有效。
+  ⇒ **§17 的侧链结论不受影响。**
+
+### 21.6 方法论教训
+> **任何「跳过已有结果」的幂等机制，都必须把「产出它的代码版本」一起纳入判据。**
+> 否则修 bug 之后的重跑会给出一个看起来完整、实则新旧混合的结果集，
+> 而且 job 状态是 `COMPLETED` —— 没有任何信号提示你。
+
+配套的第二条：**聚合层出现 `NaN` / `AUC=0.5` / `MCC=0` 时不要跳过，它们是退化预测的指纹。**
+本次正是靠 `Wilcoxon p = nan` 才把这个问题揪出来。

@@ -106,6 +106,34 @@ def _align_map(obs_seq, ref_seq):
     return out
 
 
+
+def _code_stamp():
+    """本打分脚本自身的 md5 —— 写进输出,并作为幂等跳过的判据。
+
+    🔴 为什么需要:脚本改了语义之后,旧的(错的)输出会因为「文件已存在」被静默跳过而保留下来。
+       实测事故(2026-09-12):LASErMPNN 的链映射修复后重跑,25 个 csv 里 23 个是修复【之前】写的,
+       只有 2 个用了新代码,而 job 报 COMPLETED 25/25 —— 聚合出的 0.3614 是废数。
+       改为按 md5 戳跳过:戳不一致就重算。
+    """
+    import hashlib, os
+    return hashlib.md5(open(os.path.abspath(__file__), "rb").read()).hexdigest()[:12]
+
+
+def _should_skip(out_csv, stamp):
+    import os
+    import pandas as _pd
+    if not (os.path.exists(out_csv) and os.path.getsize(out_csv) > 0):
+        return False
+    try:
+        old = _pd.read_csv(out_csv, nrows=1)
+        if "code_stamp" in old.columns and str(old["code_stamp"].iloc[0]) == stamp:
+            return True
+        print(f"  [restale] {os.path.basename(out_csv)} 的 code_stamp 与当前脚本不符,重算")
+    except Exception:
+        pass
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="LigandMPNN repo 路径")
@@ -146,8 +174,9 @@ def main():
     row = idx.iloc[a.dms_index]
     DMS_id = row["DMS_id"]
     out_csv = os.path.join(a.dms_output, f"{DMS_id}.csv")
-    if os.path.exists(out_csv) and os.path.getsize(out_csv) > 0:
-        print(f"[skip] {DMS_id} 已存在"); return
+    STAMP = _code_stamp()
+    if _should_skip(out_csv, STAMP):
+        print(f"[skip] {DMS_id} 已存在且 code_stamp 一致"); return
 
     ck = torch.load(a.checkpoint, map_location=dev, weights_only=False)
     atom_ctx = ck["atom_context_num"] if a.model_type == "ligand_mpnn" else 1
@@ -276,7 +305,7 @@ def main():
             print(f"  POI={POI} chains={chain_ids}: {len(g)} variants, {len(cache)} 次 pass")
 
     out = pd.concat(all_g).sort_index()
-    out["seed"] = a.seed; out["run_id"] = a.run_id
+    out["seed"] = a.seed; out["run_id"] = a.run_id; out["code_stamp"] = STAMP
     assert len(out) == len(df), f"行数变了 {len(out)} vs {len(df)} —— 不允许过滤"
     os.makedirs(a.dms_output, exist_ok=True)
     out.to_csv(out_csv, index=False)

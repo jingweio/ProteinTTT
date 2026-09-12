@@ -3,6 +3,20 @@
 > task: `bgym25_zeroshot_4model_benchmark` · created 2026-09-11 22:46 · **status: PLANNED**
 > 锚点实验：[`workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md`](../../workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md)
 
+> ## 📖 怎么读这篇（2026-09-12 16:56 更新）
+>
+> **只想看结论** → §17（侧链对比，**已定论**）、§12.1/§12.3/§12.4（MPNN 家族，**已定论**）。
+> **想看设计为什么这么定** → §3（三族打分口径）、§4（组合库结构如何决定成本）。
+> **想看踩过的坑** → §15（smoke 三轮）、§19（四个模型各自的 parser 差异）、
+> **§21（一次差点写进结论的假结果 —— 建议优先看这条）**。
+> **想看现在跑到哪** → §20。
+>
+> ⚠️ **结论有效性标注**
+> - ✅ **已定论且不会再变**：§12.1 的 5 个 MPNN run、§17 的侧链对比（波及范围已在 §21.5 逐个查证）
+> - 🔄 **尚无有效结果**：LASErMPNN（旧结果已全部作废，见 §21）、ADFLIP、StaB-ddG
+> - ❌ **文档中不存在任何 LASErMPNN 的数值结论** —— 曾经算出的 0.3614 是新旧代码混合产物，已作废
+
+
 ## 1. Goal
 
 把已复现的 **pretrained ProteinMPNN on BindingGYM zero-shot**（25 assay，Spearman 0.3914 vs 官方
@@ -263,7 +277,16 @@ mean Δ = +0.0000   sd = 0.0446   正号 12/25   Wilcoxon p = 0.874
 
 ### 12.4 LigandMPNN ≈ ProteinMPNN
 
-0.388257 vs 0.389889，差 −0.0016，远小于 σ。BindingGYM 全是 protein–protein、**没有小分子配体**，
+配对检验（同口径 A、同 25 assay）：
+
+```
+proteinmpnn_ar 0.3899  vs  ligandmpnn_ar_nosc 0.3883
+Δ = +0.0016   正号 17/25   Wilcoxon p = 0.3388   ⇒ 无显著差异
+```
+（口径 B 下：`proteinmpnn_mm` 0.3899 vs `ligandmpnn_mm_sc` 0.3771，Δ=+0.0129，
+12/25，p = 0.3254 —— 同样不显著。）
+
+BindingGYM 全是 protein–protein、**没有小分子配体**，
 LigandMPNN 相对 ProteinMPNN 的增量能力（原子级配体 context）在这里没有用武之地 —— 结果符合预期。
 
 
@@ -476,14 +499,32 @@ forward，全量约 16 h。处置：**优先保 `jm` 口径**（四模型唯一�
 已逐字对齐 `benchmark.py:248-266`，并改为与其一致的**严格加载 `ckpt["model"]`**。
 ✅ 现在权重加载成功（日志 `权重严格加载成功; output_dim=33`）。
 
-**(c) 仍未解决** —— WT 校验全数失败：
+**(c) 残基集合不同（已修）** —— WT 校验全数失败：
 ```
 4D5_HER2_1N8Z : ADFLIP 解析 1015 残基 vs BindingGYM 1041
 5A12_Ang2_4ZFG: ADFLIP 解析  648 残基 vs BindingGYM  652
-5A12_VEGF_4ZFF: ADFLIP 解析  520 残基 vs BindingGYM  528
 ```
-与 LASErMPNN 同一类问题：**ADFLIP 的 parser 残基集合与 BindingGYM 不同**。
-需把「要求数量相等」的 assert 换成**逐链 NW 比对映射**（同 §19.2）。
+ADFLIP 同样丢掉 backbone 不完整的残基。**额外的麻烦**：`pdb2data` 只保留 ndarray 字段，
+链**字母**丢失，只剩数值型 `chain_id`。
+修法：**按链块切分 + 试所有排列取错配最少的指派**，再逐块 NW 比对建映射。
+实测找到了非平凡指派 —— `5A12_Ang2` / `5A12_VEGF` 都是 `(1,2,0)`，即链顺序确实错位：
+```
+[map] 4D5_HER2_1N8Z : 解析 1015/1041, 链块指派 (0,1,2), 映射 1015 个位点
+[map] 5A12_Ang2_4ZFG: 解析  648/652,  链块指派 (1,2,0), 映射  648 个位点
+```
+
+**(d) PyG 版本太新（已修）** —— 前三个修完后仍崩在：
+```
+ImportError: 'knn_graph' requires 'pyg-lib>=0.6.0'
+  at model/zoidberg/zoidberg_GNN.py:172
+```
+实测：`PyG 2.8.0.post1`，`WITH_TORCH_CLUSTER = None`、`WITH_PYG_LIB = False`。
+即 PyG 2.8 **去掉了 torch-cluster 后备路径**，`knn_graph` 改为强制要 `pyg-lib`。
+而 `torch_cluster 1.6.3+pt21cu121` 装着且与 torch 2.1.0 匹配 —— 是 PyG 不用它。
+根因：**ADFLIP 的 `requirements.txt` 里 `torch_geometric` 没有 pin 版本**，pip 抓了最新版。
+修法：降到 `torch_geometric==2.6.1` ⇒ `WITH_TORCH_CLUSTER = True`，
+并实测 `knn_graph(x, k=8)` 返回 `[2, 400]` 正常。
+⇒ **这是「不 pin 版本」这一类坑的第二次出现**（第一次是 §15 的 `setuptools` / `pkg_resources`）。
 
 ### 19.2 LASErMPNN（残基集合 + 链顺序）
 
@@ -494,10 +535,12 @@ backbone 不完整的残基（它要算 chi 角）。已把等长 assert 换成 
 `Z-domain_ZSPA-1_1LP1`（链 A = Z-SPA-1 affibody，链 B = Z-domain，二者同源）报
 `[(85,'W','K'),(82,'F','Q'),(78,'K','N')]`。
 
-**(c) 仍未解决 —— 链顺序** —— 改逐链后错配位从 78/82/85 变成 **31/28/24，且残基对正好互换**
-（`(31,'K','W')` vs 原 `(85,'W','K')`）⇒ **链 A/B 被对调了**。
-我用 `batch.chain_indices` 的唯一值顺序去对应 `order`，这个假设不成立。
-需改用 LASErMPNN 自己的 `residue_identifiers` 取真实链字母。
+**(c) 链顺序（已修）** —— 改逐链后错配位从 78/82/85 变成 **31/28/24，且残基对正好互换**
+（`(31,'K','W')` vs 原 `(85,'W','K')`）⇒ **链 A/B 被对调**。
+我用 `batch.chain_indices` 的唯一值顺序去对应 BindingGYM 的 `chain_id` 顺序，这个假设不成立。
+修法：链字母改取自 LASErMPNN 自己的 **`data.residue_identifiers[i].chain_id`**（含真实字母）。
+实测 `KRAS_SOS1_8BE4` 的解析顺序是 **S(440) 在前、R(165) 在后**，而 BindingGYM 的 `chain_id` 是 `RS`
+—— 顺序确实无关。修后逐链比对：链 R 165/165、链 S 440/440，**零错配**。
 
 ### 19.3 StaB-ddG —— 突变编号约定（已修，旧结果已作废）
 
@@ -532,21 +575,21 @@ BindingGYM 的序列约定天然对齐。已遇到五类：
 **通用对策**：一律「解析 → 逐链 NW 比对到 BindingGYM 参考序列 → 未映射位不参与打分」，
 并对比对后的 WT 做零错配断言。**每一类都不会报错、数字也完全合理，只有硬校验能拦住。**
 
-## 20. 当前状态快照（2026-09-12 14:26）
+## 20. 当前状态快照（2026-09-12 16:56）
 
 | run | 覆盖 | 状态 |
 |---|---|---|
-| `proteinmpnn_ar` / `proteinmpnn_mm` | 25/25 | ✅ |
-| `ligandmpnn_ar_nosc` / `_sc` / `_mm_sc` | 25/25 | ✅ |
-| `ligandmpnn_ar_scfix` / `_noscfix` | 25/25 | ✅ 见 §17 |
-| `lasermpnn_jm` | 23/25 | 🔄 待修 §19.2(c) |
-| `lasermpnn_ar` | 7/25 | 🔄 RUNNING，慢（~16 h） |
-| `adflip_jm` | 0/25 | 🔄 待修 §19.1(c) |
-| `stabddg_s2` | 3/25 | 🔄 RUNNING（编号已修，重算中） |
+| `proteinmpnn_ar` / `proteinmpnn_mm` | 25/25 | ✅ 有效 |
+| `ligandmpnn_ar_nosc` / `_sc` / `_mm_sc` | 25/25 | ✅ 有效 |
+| `ligandmpnn_ar_scfix` / `_noscfix` | 25/25 | ✅ 有效，见 §17 |
+| `lasermpnn_jm` / `lasermpnn_ar` | 0/25 | 🔄 **全部作废重跑**（§21） |
+| `adflip_jm` | 8/25 | 🔄 四个 bug 全修完，**正在正常产出** |
+| `stabddg_s2` | 7/25 | 🔄 编号已修（§19.3），重算中 |
 
 **产物路径**
 - per-variant 分数：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/scores/{run_id}/{DMS_id}.csv`
 - StaB-ddG：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/stabddg_s2/{DMS_id}/output/`
+- 作废留证：`scores/lasermpnn_*_STALE_prefix_*`、`stabddg_s2_OLD_wrong_numbering_*`
 - 逐 assay 指标 + leaderboard（已回流进 repo）：`ibex-records/{project}/results/`
 
 ## 21. 🔴 一次差点写进结论的假结果 —— 幂等跳过 + 改代码 = 旧坏结果被静默保留

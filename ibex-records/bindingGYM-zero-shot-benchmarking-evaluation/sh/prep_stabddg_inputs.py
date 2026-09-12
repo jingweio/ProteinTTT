@@ -82,8 +82,11 @@ def main():
         assert key in pdict, f"{DMS_id}: StaB-ddG 的 parse_PDB 里没有链 {c}"
         seqc[c] = pdict[key]
         am = _align_map(seqc[c], wt_ref[c])            # seq_chain 下标 -> BindingGYM 下标
+        # StaB-ddG 的 parse_PDB 用 '-' 表示按残基编号补洞的位置,BindingGYM 用 'X';
+        # 两者都是"未知/无坐标",不算错配。
+        UNK = {"X", "-"}
         mism = [(k, seqc[c][k], wt_ref[c][v]) for k, v in am.items()
-                if seqc[c][k] != wt_ref[c][v] and seqc[c][k] != "X"]
+                if seqc[c][k] != wt_ref[c][v] and seqc[c][k] not in UNK and wt_ref[c][v] not in UNK]
         assert not mism, f"{DMS_id} 链{c}: 比对后 WT 不符,前 3 处 {mism[:3]}"
         ref2idx[c] = {v: k for k, v in am.items()}     # BindingGYM 下标 -> seq_chain 下标
         if len(seqc[c]) != len(wt_ref[c]):
@@ -101,7 +104,7 @@ def main():
                 wt, pos, mt = tk[0], int(tk[1:-1]), tk[-1]
                 k = ref2idx.get(c, {}).get(pos - 1)     # BindingGYM 1-based -> seq_chain 0-based
                 if k is None: ok = False; continue      # 该位点在结构里缺失
-                assert seqc[c][k] == wt or seqc[c][k] == "X", \
+                assert seqc[c][k] == wt or seqc[c][k] in ("X", "-"), \
                     f"{DMS_id}: 链{c} 序列位{pos} -> seq_chain[{k}]={seqc[c][k]} 但 mutant 说 {wt}"
                 toks.append(f"{wt}{c}{k+1}{mt}")        # StaB-ddG 要 1-based seq_chain 下标
         if not toks: ok = False

@@ -258,7 +258,7 @@ AP_norm = ( AP − π ) / ( 1 − π )        π = 该 assay 的界面占比
 > 所以 **mean 是主指标**；median 一并列出只是为了看分布有没有被个别 assay 拉偏。
 > 本例两者差别不大（AUC within mean 0.842 vs median 0.859）。
 
-## 3. 这条链被测到哪一步了：相关性（弱）+ 一次干预实验
+## 3. 一条方向性证据：encoder 编码得越好的 assay，zero-shot 倾向于越好（**未达显著**）
 
 ### 3.1 具体测了什么
 
@@ -334,124 +334,19 @@ Pearson 看**线性**关系，对具体数值敏感。两者接近，说明结�
 2. **复合物大小 `L`** —— 残基数多则探针训练样本多、AUC 可能偏高；`L` 也影响打分的尺度与方差。
 3. **assay 本身的噪声水平** —— DMS 噪声大的 assay，`ρ_zeroshot` 上限本来就低，与 encoder 无关。
 
-**这个干预已经做了，结果见 §3.4。** 设计如下。
+**细粒度那一行（`ρ_w,within` 对 `ρ_zeroshot`，+0.013 / +0.004）看不出任何关系。**
 
-**方向 `u` 怎么来**：§2 的二值探针是一个 logistic regression，对标准化后的 `h̃_V(r)` 拟合
-`logit(r) = w · h̃_V(r) + b`。`w ∈ R¹²⁸` 就是「沿哪个方向走，探针越认为这是界面残基」，
-取单位化 **`u = w / ‖w‖`**。探针的标签来自结构（重原子 5 Å），**不含任何 DMS label**。
-
-**怎么改 —— 缩放投影，不是整体平移**：
-
-```
-h̃_V'(r) = h̃_V(r) + α · ( u · h̃_V(r) ) · u
-```
-
-把每个残基**自己**在 `u` 上的分量乘 `(1 + α)`。
-
-| `α` | 对 `u` 方向分量的作用 | 数学性质 | 回答的问题 |
-|---|---|---|---|
-| `0` | ×1 | — | 对照原点 |
-| `> 0` | ×`(1+α)`，放大 | **可逆** ⇒ **不增加信息** | decoder 对这根轴的**响应有多灵敏** |
-| `= −1` | ×0，**抹掉该方向** | **不可逆** ⇒ **真正移除信息** | **decoder 到底用不用这根轴** |
-| `< −1` | ×负数，反转 | 可逆 | 方向性是否重要 |
-
-> 🔴 **不要写成 `h_V + α·u` 这种整体平移。** 那样每个残基的 logit 都增加同一个常数，
-> **残基之间按界面程度的相对次序完全没变**，`h_V` 里的界面信息量一点没动。
-
-**验证操作做对了**：`u · h̃' = (1 + α) · u·h̃`（因为 `‖u‖=1`），正交分量不动。脚本里是 assert。
-⚠️ **不要拿探针 AUC 验证** —— logit 变成 `(1+α)(w·h̃)+b`，`α > −1` 时是严格单调增变换，
-**排序不变 ⇒ AUC 恒定**（实测 α 从 −0.5 到 +3，AUC 全是 0.985）。
-
-**两条对照臂**（只跑主臂读不出东西：任何足够大的扰动都会让模型变差）：
-
-| 臂 | 是什么 | 排除什么 |
-|---|---|---|
-| **随机方向**（3 个 seed） | `h̃` 空间里的随机单位向量 | 「任何扰动都有这个效果」 |
-| **打乱分量的 `u`** | 把 `u` 的 128 个分量随机置换 | 保留 `u` 的数值分布，只破坏「哪个值属于哪一维」 |
-
-**幅度用 `ε = ‖Δh̃‖_F / ‖h̃‖_F` 精确对齐**，不共用 `α` ——
-真实 `u` 指向有实际方差的方向、投影大，同一个 `α` 对它是大得多的改动。
-对照臂的系数按 `α_v = sign(α)·T/‖h̃·v‖` 反解，使三臂 `ε` 逐位相同。
-
-### 3.4 干预的结果
-
-7 个 assay × 10 个 `α` × 5 条方向臂 = 350 次全量重打分，34 GPU-min，M=1，
-per-assay Spearman 与该 assay 自己的 `α=0` 比。
-
-**逐 assay（表内为 `iface − random`，即扣掉同幅度随机扰动后的净效应；按 `AP_norm` 排序）：**
-
-| assay | `AP_norm` | `corr(w,s)` | α=−1（消融） | α=+1 | α=+2 | α=+4 | **α=+8** |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `ACE2_SARS2-RBD` | 0.679 | -0.219 | -0.0013 | +0.0013 | +0.0022 | +0.0027 | **-0.0051** ❌ |
-| `CD19_FMC63` | 0.632 | -0.176 | +0.0017 | +0.0002 | +0.0007 | +0.0004 | **+0.0038** ✅ |
-| `HLA-A2_TAPBPR` | 0.564 | -0.068 | -0.0023 | +0.0027 | +0.0055 | +0.0111 | **+0.0200** ✅ |
-| `5A12_Ang2` | 0.471 | -0.024 | +0.0005 | -0.0005 | -0.0005 | +0.0007 | **+0.0021** ✅ |
-| `CXCR4_CXCL12` | 0.460 | -0.019 | +0.0022 | -0.0020 | -0.0043 | -0.0091 | **-0.0182** ❌ |
-| `PSD95_CRIPT` | 0.312 | -0.080 | +0.0009 | -0.0002 | -0.0022 | -0.0140 | **-0.0696** ❌ |
-| `PSD95_Tm2F` | 0.172 | -0.010 | +0.0013 | -0.0033 | -0.0065 | -0.0137 | **-0.0228** ❌ |
-
-**全局均值（三臂对比）：**
-
-| `α` | `ε` | **iface** | random | shuffled |
-|---:|---:|---:|---:|---:|
-| -8 | 0.693 | **+0.0006** | -0.0026 | -0.0043 |
-| -4 | 0.347 | **+0.0021** | +0.0001 | -0.0001 |
-| -2 | 0.173 | **+0.0010** | +0.0002 | +0.0000 |
-| -1 | 0.087 | **+0.0004** | +0.0001 | -0.0001 |
-| -0.5 | 0.043 | **+0.0002** | +0.0001 | +0.0000 |
-| 0.5 | 0.043 | **-0.0003** | -0.0001 | -0.0001 |
-| 1 | 0.087 | **-0.0006** | -0.0003 | -0.0003 |
-| 2 | 0.173 | **-0.0014** | -0.0007 | -0.0007 |
-| 4 | 0.347 | **-0.0051** | -0.0020 | -0.0024 |
-| 8 | 0.693 | **-0.0196** | -0.0067 | -0.0074 |
-
-#### 四条结论
-
-**1. 这根轴是真的 —— 不是随机方向。**
-`|iface − random|` 随 `|α|` 单调增长，**4/7 严格单调**（另 3 个是效应最小的，在噪声里）；
-随机臂与 shuffled 臂只随幅度对称地轻微恶化。**decoder 确实「看得见」这根轴。**
-
-**2. 🔴 但效应极小，而且完全消融几乎没有影响。**
-`α = −1`（把界面方向整个抹掉）的 Δρ 在 7 个 assay 上是 **−0.0023 ~ +0.0022**，中位 **+0.0009**。
-要让 |Δρ| 达到 0.02 量级，得把 `h̃` 改动 **69%**（`ε = 0.69`）—— 那已是破坏表征而非调整它。
-⇒ **冻结的 decoder 基本不用这根轴。**
-
-> ⚠️ **一个必须带着的量化背景**：`u` 是 128 维里的**一个**方向，只占 `h̃` 全部方差的约 1%
-> （`√(1/128) ≈ 0.088`，实测 `α=−1` 时 `ε = 0.087`）。所以「完全消融」在 `h_V` 的尺度上
-> **本来就是个小改动** —— 这限制了本实验能读出的效应上限，
-> **不能据此断言「界面信息对 decoder 完全无用」**，只能说「沿这一个线性方向的改动传导极弱」。
-
-**3. 方向逐 complex 不同，而且 `corr(w, s_frozen)` 预测不了它。**
-放大（`α>0`）在 **3/7** 上有益、**4/7** 上有害。
-与「模型当前在这根轴上的位置」的相关是 **Spearman −0.286, p=0.535** —— 没有关系。
-最直接的反例：`CXCR4`(−0.019)、`PSD95_Tm2F`(−0.010)、`5A12`(−0.024) 三者 `corr` 几乎相同，
-效应却分列两边；而 `corr` 最负的 `CD19`(−0.176) 只有 +0.0038，弱于 `HLA-A2`(−0.068) 的 +0.0200。
-
-**4. ⭐ 但效应方向与**探针质量 `AP_norm`**有关（这是本实验唯一的正面发现）。**
-按 `AP_norm` 排序后，**前 4 名有 3 个为正、后 3 名全为负**；
-Spearman **+0.714, p=0.071**（n=7，接近显著但未过线）。
-
-**直觉是自洽的**：`AP_norm` 低意味着**探针没能可靠地识别出界面方向** ——
-那么 `u` 本身就带着大量噪声，放大它等于放大噪声，自然有害
-（`PSD95_Tm2F` 的 `AP_norm` 只有 0.172，是全场最低，效应也最负之一）。
-
-⇒ **若要从 encoder 侧加码，先决条件是那个复合物的界面方向本身要被可靠地识别出来。**
-⚠️ 但 `n=7`、`p=0.071`、且 `AP_norm` 是在看到结果之前就定义好的但**未做多重比较校正**，
-**这是一条待验证的线索，不是结论。**
-
-#### 对 structure-TTT 的含义
-
-| | |
-|---|---|
-| ✅ **没有被否掉** | 传导通路存在且可测量；`u` 不是随机方向 |
-| 🔴 **但门槛比预期高** | 沿单一线性方向的传导**极弱**（完全消融 ≈ +0.0009），且**方向逐 complex 不同** |
-| 🔴 **老问题又出现了** | 要 per-complex 决定推哪个方向，而**没有 label 时怎么定方向**仍未解决 —— 这与 `λ` / `c` 是同一类问题（§4.2 条 10） |
-| ⭐ **一条线索** | `AP_norm` 可能是那个 label-free 的判据（它只用结构算，不用 DMS label） |
-
-**⇒ 一个只在 encoder 侧、对所有复合物统一「加强界面表征」的做法，
-按本实验的证据大概率在约一半的 assay 上有害。**
-更可能有效的路径是：**先用 `AP_norm` 筛出界面方向可靠的复合物**，
-或者**同时改变 decoder 读这根轴的方式**，而不是只在 encoder 侧加码。
+> ⚠️ **这条「无关系」同样不宜过度解读**，它很可能被数据分布主导：
+> - **界面残基是少数类**（14 个 assay 平均只占 12.6%，最低 3.8%），
+>   而 `ρ_w` 是在**全部残基**上算的 —— 绝大多数残基都在「远端」那一段，
+>   那里 `w = exp(−d/5Å)` 已经饱和到接近 0、彼此几乎无差别。
+>   **⇒ `ρ_w` 的数值主要由「远处那一大片排得对不对」决定，而那恰恰是我们最不关心的部分。**
+> - **assay 数量太少**（n=14），这个量级的相关系数**本来就分辨不出 0 与 0.3 的差别**。
+> - 两端（`ρ_w` 与 `ρ_zeroshot`）各自都还带着自己的噪声。
+>
+> ⇒ **正确的说法是「在当前设计与样本量下没有观察到关系」，不是「细粒度编码与 zero-shot 无关」。**
+> 要真正回答它，至少需要：把 `ρ_w` 限制在**界面附近的残基**上重算、扩大 assay 数量、
+> 并控制复合物大小与界面占比这两个混淆项。
 
 ---
 
@@ -530,7 +425,6 @@ Spearman **+0.714, p=0.071**（n=7，接近显著但未过线）。
 |---|---|
 | **可微打分 + encoder 缓存**（`AssayContext` 已缓存 encoder 输出，改 `h_V` 后只需跑 decoder） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/bgmpnn.py` |
 | **encoder 线性探针（现行，重原子 5 Å，已排除缺口）** | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/ga2_encoder_probe.py` |
-| **干预实验（§3.4）：缩放 h_V 的界面方向并重打分** | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/s0_intervention.py` |
 | *旧版探针（CA–CA 8 Å，含缺口填充位；仅供追溯，勿用）* | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/ga_encoder_probe.py` |
 | **no-op 对照**（验证打分函数与官方逐行一致） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/gb_noop_control.py` |
 | 官方 `protein_mpnn_utils.py` 的 vendored 副本（md5 `56fc8e171b6d97dc9a048259f4eb3a77`） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/vendor/protein_mpnn_utils.py` |
@@ -545,7 +439,6 @@ Spearman **+0.714, p=0.071**（n=7，接近显著但未过线）。
 | 逐 variant 的界面标签 + MPNN zero-shot 分数（376,424 行） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis-pred/data/variant_labels_with_mpnn.parquet` |
 | **逐突变位点**距离（1,173,273 对，可换任意聚合方式） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data/variant_site_dists.parquet` |
 | G-A 探针逐 assay 结果（**现行**，§2 的原始数据） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/ga2_encoder_probe.csv` |
-| 干预实验逐配置结果（§3.4，350 行） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/s0_intervention.csv` |
 | 各 assay 被排除的残基数（缺口填充位统计） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/ga2_coverage.csv` |
 | 逐 assay 的 zero-shot ρ 与其他参照量 | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/t4_per_assay_bars.csv` |
 | 14-assay 集合的推导与逐 assay 明细 | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/g1e_canonical14.csv` |

@@ -1,8 +1,41 @@
 # BindingGYM zero-shot benchmark：四个 inverse-folding 模型的 readout 改造与评测
 
-> 整理版 · 2026-09-12 22:20 · status: 3/4 模型已定论，StaB-ddG 进行中
+> 整理版 · **最后更新 2026-09-13 09:46**
 > 过程稿（含逐个 bug 的排查时间线）：[`bgym25_zeroshot_4model_benchmark_20260911-224626.md`](./bgym25_zeroshot_4model_benchmark_20260911-224626.md)
 > **本篇按逻辑组织，不按排查顺序。** 想看"当时是怎么一步步查出来的"请看过程稿。
+
+## 0. 进度总览
+
+**四个目标模型全部已有定论结果。** 唯一未完成的是 LASErMPNN 的**第二个口径**，不影响任何结论。
+
+| 模型 | 口径 A (AR-NLL) | 口径 B (joint-masked) | 结论状态 |
+|---|---|---|---|
+| ProteinMPNN *(参照)* | ✅ 0.3899 | ✅ 0.3899 | 已定论 |
+| **LigandMPNN** | ✅ 0.3883 | ✅ 0.3771 | 已定论（含侧链轴，§7.4） |
+| **LASErMPNN** | 🔄 9/25 | ✅ 0.3757 | 已定论（用口径 B） |
+| **ADFLIP** | — *(架构上出不了)* | ✅ 0.3630 | 已定论 |
+| **StaB-ddG** stage1 / stage2 | ✅ 0.3760 / 0.3564 | ✅ 0.3698 / 0.3545 | 已定论 |
+
+**三条主结论**（详见 §8）：
+1. **更强的结构表征不能超过 backbone-only** —— 全原子 / 配体感知模型全部打平或更差（§8.1）
+2. **让模型看到 partner 的侧链有显著增益** —— +0.0082，p = 0.0158，含零差异内部对照（§8.2）
+3. **稳定性目标不能替代结合目标** —— Megascale finetune 无显著净效应但剧烈重排（§8.3）
+
+**尚未完成**：`lasermpnn_ar` 9/25（等变图网络逐 variant 打分，全量约 16 h，已排足续跑 slot）。
+它只影响"LASErMPNN 在两个口径下排序是否一致"这一项交叉验证，**不改变上述任何结论**。
+
+### 怎么读这篇
+| 你想看 | 去哪 |
+|---|---|
+| **结论** | §8（三条，含限定条件）；数字在 §7 |
+| **你最关心的 readout 改造** | §5（逐模型：与 ProteinMPNN 的差异表 → 改法 → 验证） |
+| 为什么口径要分三族 | §4 |
+| 为什么四个模型的残基坐标系都对不上 | §6（六类 parser 差异 + 统一对策） |
+| 结论的边界 | **§9（五条 caveat，必须与结论一起读）** |
+| 复现 / 产物路径 | §10 |
+
+> ⚠️ **审核时请特别留意 §9** —— 表里好几个 Δ 就在解码序噪声（σ≈0.018）的量级，
+> 单看排名容易过度解读。
 
 ---
 
@@ -276,7 +309,7 @@ ADFLIP 的字母在 `pdb2data` 里丢失，只剩数值 `chain_id` ⇒ 用**链�
 
 ## 7. 结果
 
-### 7.1 口径 B —— 四模型同口径、同 25 assay
+### 7.1 口径 B —— 全部 6 个 run 同口径、同 25 assay
 
 | 排名 | 模型 | Spearman | AUC | MCC | NDCG |
 |---|---|---|---|---|---|
@@ -287,7 +320,8 @@ ADFLIP 的字母在 `pdb2data` 里丢失，只剩数值 `chain_id` ⇒ 用**链�
 | 5 | ADFLIP（全原子 flow matching） | 0.3630 | 0.6719 | 0.1372 | 0.7028 |
 | 6 | StaB-ddG **stage2**（Megascale finetune） | 0.3545 | 0.6728 | 0.1446 | 0.6965 |
 
-**全部配对检验（Wilcoxon，同 25 assay）** —— 唯一显著的只有一项：
+**四个目标模型之间的配对检验（Wilcoxon，同 25 assay）** —— 唯一显著的只有一项
+（StaB-ddG 两阶段之间的对照见 §7.2）：
 
 | 对比 | Δ | 正号 | p |
 |---|---|---|---|
@@ -429,15 +463,15 @@ StaB-ddG 真正针对 binding 的是 **stage3（SKEMPI finetune）**，但它与
 **数据有效性三查**（每个 run 报数前都跑）：
 `code_stamp` 单一值（确认全部由同一版代码产出）· 零退化 assay（`nunique>1`、`std>0`）· 逐 assay 无 `NaN`。
 
-| run | 覆盖 | code_stamp |
-|---|---|---|
-| `proteinmpnn_ar` / `_mm` | 25/25 | ✅ |
-| `ligandmpnn_ar_nosc` / `_sc` / `_mm_sc` | 25/25 | ✅ |
-| `ligandmpnn_ar_scfix` / `_noscfix` | 25/25 | ✅ |
-| `lasermpnn_jm` | 25/25 | `0ee856487461` |
-| `adflip_jm` | 25/25 | `ece43ce4b11a` |
-| `lasermpnn_ar` | 6/25 | 进行中 |
-| `stabddg_s2` | 10/25 | 进行中 |
+| run | 覆盖 | code_stamp | 状态 |
+|---|---|---|---|
+| `proteinmpnn_ar` / `_mm` | 25/25 | ✅ | 已定论 |
+| `ligandmpnn_ar_nosc` / `_sc` / `_mm_sc` | 25/25 | ✅ | 已定论 |
+| `ligandmpnn_ar_scfix` / `_noscfix` | 25/25 | ✅ | 已定论 |
+| `lasermpnn_jm` | 25/25 | `0ee856487461` | 已定论 |
+| `adflip_jm` | 25/25 | `ece43ce4b11a` | 已定论 |
+| `stabddg_s1_ar` / `_jm` / `s2_ar` / `_jm` | 25/25 ×4 | `1e7eef418c3e` | 已定论 |
+| `lasermpnn_ar` | **9/25** | — | 🔄 进行中 |
 
 **打分脚本**（`ibex-records/bindingGYM-zero-shot-benchmarking-evaluation/sh/`）
 | 文件 | 作用 |
@@ -465,5 +499,5 @@ StaB-ddG 真正针对 binding 的是 **stage3（SKEMPI finetune）**，但它与
 ## 11. 关联
 - 过程稿（逐个 bug 的排查时间线、env 构建、job 记录）：
   [`bgym25_zeroshot_4model_benchmark_20260911-224626.md`](./bgym25_zeroshot_4model_benchmark_20260911-224626.md)
-  —— 其中 **§21** 记录了一次"幂等跳过未校验代码版本 ⇒ 新旧结果混合"的事故，方法论价值较高。
+  —— 其中**过程稿的 §21** 记录了一次"幂等跳过未校验代码版本 ⇒ 新旧结果混合"的事故，方法论价值较高。
 - 锚点实验：[`workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md`](../../workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md)

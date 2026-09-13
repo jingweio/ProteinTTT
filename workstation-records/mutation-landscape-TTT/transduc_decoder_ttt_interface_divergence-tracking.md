@@ -1,10 +1,10 @@
-# decoder_ttt_interface_divergence — tracking log
+# transduc_decoder_ttt_interface_divergence — tracking log
 
-**project `mutation-landscape-TTT` · task `decoder_ttt_interface_divergence` · 开始 2026-09-12**
+**project `mutation-landscape-TTT` · task `transduc_decoder_ttt_interface_divergence` · 开始 2026-09-12**
 
 > **这篇是什么**：任务推进的**操作日志** —— 跑了什么、怎么跑的、出了什么错、口径怎么改的。
 > 不追求前后逻辑顺畅，**只追求细节查得到**。
-> **结论看** [`decoder_ttt_interface_divergence-organized.md`](decoder_ttt_interface_divergence-organized.md)。
+> **结论看** [`transduc_decoder_ttt_interface_divergence-organized.md`](transduc_decoder_ttt_interface_divergence-organized.md)。
 > 姊妹记录（上一阶段的摸底）：[`probe_binding_site_insight_value_20260909-160514.md`](probe_binding_site_insight_value_20260909-160514.md)
 
 ---

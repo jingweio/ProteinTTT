@@ -114,6 +114,10 @@ def main():
     pd.DataFrame(drop).to_csv(f"{OUT}/ga2_coverage.csv", index=False)
     X = np.vstack(X_all); d = np.concatenate(d_all); A_ = np.concatenate(a_all)
     y = (d <= CUT).astype(int)
+    # Continuous target: the bounded soft label rather than raw distance. Raw d is unbounded
+    # and its scale differs per complex, which a linear model fits badly; exp(-d/5A) squashes
+    # it into (0, 1] with 1 = on the interface, and is the same w(.) used downstream.
+    wsoft = np.exp(-d / CUT)
     Xs = (X - X.mean(0)) / (X.std(0) + 1e-8)
 
     rows = []
@@ -121,22 +125,30 @@ def main():
         m = A_ == dms
         if len(set(y[m])) < 2 or m.sum() < 40:
             rows.append(dict(DMS_id=dms, n=int(m.sum()))); continue
-        pa = np.zeros(m.sum()); pr = np.zeros(m.sum())
+        pa = np.zeros(m.sum()); ps = np.zeros(m.sum()); pd_ = np.zeros(m.sum())
         for tr, te in StratifiedKFold(5, shuffle=True, random_state=0).split(Xs[m], y[m]):
             pa[te] = LogisticRegression(max_iter=2000).fit(Xs[m][tr], y[m][tr]).predict_proba(Xs[m][te])[:, 1]
-            pr[te] = Ridge(alpha=1.0).fit(Xs[m][tr], d[m][tr]).predict(Xs[m][te])
+            ps[te] = Ridge(alpha=1.0).fit(Xs[m][tr], wsoft[m][tr]).predict(Xs[m][te])
+            pd_[te] = Ridge(alpha=1.0).fit(Xs[m][tr], d[m][tr]).predict(Xs[m][te])
         tr = ~m
         qa = LogisticRegression(max_iter=2000).fit(Xs[tr], y[tr]).predict_proba(Xs[m])[:, 1]
-        qr = Ridge(alpha=1.0).fit(Xs[tr], d[tr]).predict(Xs[m])
+        qs = Ridge(alpha=1.0).fit(Xs[tr], wsoft[tr]).predict(Xs[m])
+        qd = Ridge(alpha=1.0).fit(Xs[tr], d[tr]).predict(Xs[m])
         rows.append(dict(DMS_id=dms, n=int(m.sum()), frac_iface=float(y[m].mean()),
-                         auc_in=roc_auc_score(y[m], pa), rho_in=stats.spearmanr(pr, d[m]).statistic,
-                         auc_loao=roc_auc_score(y[m], qa), rho_loao=stats.spearmanr(qr, d[m]).statistic))
+                         auc_in=roc_auc_score(y[m], pa), auc_loao=roc_auc_score(y[m], qa),
+                         # primary continuous read-out: bounded soft label exp(-d/5A)
+                         rhow_in=stats.spearmanr(ps, wsoft[m]).statistic,
+                         rhow_loao=stats.spearmanr(qs, wsoft[m]).statistic,
+                         # kept for comparison: regressing raw distance
+                         rho_in=stats.spearmanr(pd_, d[m]).statistic,
+                         rho_loao=stats.spearmanr(qd, d[m]).statistic))
     t = pd.DataFrame(rows); t.to_csv(f"{OUT}/ga2_encoder_probe.csv", index=False)
     pd.set_option("display.width", 240)
     print("\n=== 冻结 encoder node embedding 的线性探针（重原子 5 A 定义，已排除缺口与 mask=0）===")
     print(t.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     for c, lab in [("auc_in", "AUC within"), ("auc_loao", "AUC LOAO"),
-                   ("rho_in", "rho(d) within"), ("rho_loao", "rho(d) LOAO")]:
+                   ("rhow_in", "rho(soft) within"), ("rhow_loao", "rho(soft) LOAO"),
+                   ("rho_in", "rho(raw d) within"), ("rho_loao", "rho(raw d) LOAO")]:
         print(f"  {lab:16s} mean {t[c].mean():.3f}   median {t[c].median():.3f}")
 
 

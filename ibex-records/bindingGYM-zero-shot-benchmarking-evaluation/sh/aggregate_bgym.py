@@ -31,7 +31,11 @@ def main():
     rows = []
     for d in sorted(glob.glob(os.path.join(a.scores_root, "*/"))):
         run = os.path.basename(d.rstrip("/"))
-        if run.startswith("smoke"): continue
+        # 🔴 作废/留证目录绝不能进 leaderboard —— 否则读表的人会把废数当结果
+        #    (实测:lasermpnn_jm_STALE_prefix_1650 = 0.361365 曾混进汇总输出)
+        if run.startswith("smoke") or "STALE" in run or "OLD" in run:
+            print(f"[skip] {run} (smoke/作废目录,不进 leaderboard)")
+            continue
         per = []
         for f in sorted(glob.glob(os.path.join(d, "*.csv"))):
             df = pd.read_csv(f)

@@ -6,13 +6,14 @@
 
 ## 0. 进度总览
 
-**四个目标模型全部已有定论结果。** 唯一未完成的是 LASErMPNN 的**第二个口径**，不影响任何结论。
+**✅ benchmark 已完成。四个目标模型全部有定论结果。**
+LASErMPNN 的 AR 口径只跑到 9/25 后停止（原因见 §7.5：结构上跑不完），**不影响任何结论**。
 
 | 模型 | 口径 A (AR-NLL) | 口径 B (joint-masked) | 结论状态 |
 |---|---|---|---|
 | ProteinMPNN *(参照)* | ✅ 0.3899 | ✅ 0.3899 | 已定论 |
 | **LigandMPNN** | ✅ 0.3883 | ✅ 0.3771 | 已定论（含侧链轴，§7.4） |
-| **LASErMPNN** | 🔄 9/25 | ✅ 0.3757 | 已定论（用口径 B） |
+| **LASErMPNN** | ⏸ 9/25 *(已停，§7.5)* | ✅ 0.3757 | 已定论（用口径 B） |
 | **ADFLIP** | — *(架构上出不了)* | ✅ 0.3630 | 已定论 |
 | **StaB-ddG** stage1 / stage2 | ✅ 0.3760 / 0.3564 | ✅ 0.3698 / 0.3545 | 已定论 |
 
@@ -520,7 +521,7 @@ StaB-ddG 真正针对 binding 的是 **stage3（SKEMPI finetune）**，但它与
 | `lasermpnn_jm` | 25/25 | `0ee856487461` | 已定论 |
 | `adflip_jm` | 25/25 | `ece43ce4b11a` | 已定论 |
 | `stabddg_s1_ar` / `_jm` / `s2_ar` / `_jm` | 25/25 ×4 | `1e7eef418c3e` | 已定论 |
-| `lasermpnn_ar` | **9/25** | — | 🔄 进行中 |
+| `lasermpnn_ar` | 9/25 | — | ⏸ 已停（§7.5） |
 
 **打分脚本**（`ibex-records/bindingGYM-zero-shot-benchmarking-evaluation/sh/`）
 | 文件 | 作用 |
@@ -531,7 +532,11 @@ StaB-ddG 真正针对 binding 的是 **stage3（SKEMPI finetune）**，但它与
 | `prep_stabddg_inputs.py` | StaB-ddG 的输入构造（partition / 编号转换） |
 | `probe_use_sequence.py` | `use_sequence` 语义的实验判别探针 |
 | `derive_chain_partition.py` | 接触图推导 chain partition（产物已冻结） |
-| `aggregate_bgym.py` | 汇总，**逐字复用**官方 `bindinggym_metrics_one_assay` |
+| `aggregate_bgym.py` | 汇总，**逐字复用**官方 `bindinggym_metrics_one_assay`；**自动排除 `*STALE*` / `*OLD*` / `smoke*` 目录** |
+
+> ⚠️ 排除规则是后加的：作废目录曾混进汇总输出
+> （`lasermpnn_jm_STALE_prefix_1650 = 0.361365` 一度出现在 leaderboard 里）。
+> **留证目录必须保留，但绝不能进结果表** —— 两个要求同时满足只能靠汇总层显式排除。
 
 **产物**
 - per-variant 分数：`/ibex/user/guoj0f/bindingGYM-zs-benchmark/scores/{run_id}/{DMS_id}.csv`

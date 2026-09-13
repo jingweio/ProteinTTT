@@ -20,7 +20,7 @@ import argparse, os, sys
 import numpy as np, pandas as pd, torch
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, average_precision_score
 from scipy import stats
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bgmpnn import load_model, AssayContext
@@ -118,11 +118,6 @@ def main():
     # and its scale differs per complex, which a linear model fits badly; exp(-d/5A) squashes
     # it into (0, 1] with 1 = on the interface, and is the same w(.) used downstream.
     wsoft = np.exp(-d / CUT)
-    # Graded read-out: five ordinal levels, so the probe is asked for more than "touching or
-    # not". Bands are fixed in distance rather than per-assay quantiles, so a level means the
-    # same thing in every complex and a single LOAO classifier is well posed.
-    BANDS = [5.0, 8.0, 12.0, 20.0]                 # A; band 0 is the interface itself
-    lvl = np.digitize(d, BANDS)                    # 0..4, 0 = closest
     Xs = (X - X.mean(0)) / (X.std(0) + 1e-8)
 
     rows = []
@@ -131,45 +126,40 @@ def main():
         if len(set(y[m])) < 2 or m.sum() < 40:
             rows.append(dict(DMS_id=dms, n=int(m.sum()))); continue
         pa = np.zeros(m.sum()); ps = np.zeros(m.sum()); pd_ = np.zeros(m.sum())
-        K = len(BANDS) + 1
-        pg = np.zeros(m.sum())                     # graded: probability-weighted expected level
         for tr, te in StratifiedKFold(5, shuffle=True, random_state=0).split(Xs[m], y[m]):
             pa[te] = LogisticRegression(max_iter=2000).fit(Xs[m][tr], y[m][tr]).predict_proba(Xs[m][te])[:, 1]
             ps[te] = Ridge(alpha=1.0).fit(Xs[m][tr], wsoft[m][tr]).predict(Xs[m][te])
             pd_[te] = Ridge(alpha=1.0).fit(Xs[m][tr], d[m][tr]).predict(Xs[m][te])
-            gc = LogisticRegression(max_iter=3000, multi_class="multinomial").fit(Xs[m][tr], lvl[m][tr])
-            pr_ = gc.predict_proba(Xs[m][te])
-            pg[te] = pr_ @ gc.classes_             # expected level, keeps the ordinal structure
         tr = ~m
         qa = LogisticRegression(max_iter=2000).fit(Xs[tr], y[tr]).predict_proba(Xs[m])[:, 1]
         qs = Ridge(alpha=1.0).fit(Xs[tr], wsoft[tr]).predict(Xs[m])
         qd = Ridge(alpha=1.0).fit(Xs[tr], d[tr]).predict(Xs[m])
-        gq = LogisticRegression(max_iter=3000, multi_class="multinomial").fit(Xs[tr], lvl[tr])
-        qg = gq.predict_proba(Xs[m]) @ gq.classes_
-        occ = np.bincount(lvl[m], minlength=K)
-        rows.append(dict(DMS_id=dms, n=int(m.sum()), frac_iface=float(y[m].mean()),
+        # ROC-AUC is optimistic when the negative class dominates: a probe with many false
+        # positives can still rank most positives above most negatives. Average precision
+        # (area under precision-recall) is sensitive to prevalence, and AP_norm rescales it so
+        # that 0 is a random probe and 1 is perfect, making assays with different interface
+        # fractions comparable.
+        prev = float(y[m].mean())
+        ap_i = average_precision_score(y[m], pa); ap_l = average_precision_score(y[m], qa)
+        rows.append(dict(DMS_id=dms, n=int(m.sum()), frac_iface=prev,
                          auc_in=roc_auc_score(y[m], pa), auc_loao=roc_auc_score(y[m], qa),
+                         ap_in=ap_i, ap_loao=ap_l,
+                         apn_in=(ap_i - prev) / (1 - prev), apn_loao=(ap_l - prev) / (1 - prev),
                          # primary continuous read-out: bounded soft label exp(-d/5A)
                          rhow_in=stats.spearmanr(ps, wsoft[m]).statistic,
                          rhow_loao=stats.spearmanr(qs, wsoft[m]).statistic,
                          # kept for comparison: regressing raw distance
                          rho_in=stats.spearmanr(pd_, d[m]).statistic,
                          rho_loao=stats.spearmanr(qd, d[m]).statistic,
-                         # graded, five ordinal levels
-                         n_levels=int((occ > 0).sum()),
-                         occ="/".join(str(x) for x in occ),
-                         rhog_in=stats.spearmanr(pg, lvl[m]).statistic,
-                         rhog_loao=stats.spearmanr(qg, lvl[m]).statistic,
-                         acc1_in=float((np.abs(np.rint(pg) - lvl[m]) <= 1).mean()),
-                         acc1_loao=float((np.abs(np.rint(qg) - lvl[m]) <= 1).mean())))
+))
     t = pd.DataFrame(rows); t.to_csv(f"{OUT}/ga2_encoder_probe.csv", index=False)
     pd.set_option("display.width", 240)
     print("\n=== 冻结 encoder node embedding 的线性探针（重原子 5 A 定义，已排除缺口与 mask=0）===")
     print(t.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     for c, lab in [("auc_in", "AUC within"), ("auc_loao", "AUC LOAO"),
                    ("rhow_in", "rho(soft) within"), ("rhow_loao", "rho(soft) LOAO"),
-                   ("rhog_in", "rho(5-level) within"), ("rhog_loao", "rho(5-level) LOAO"),
-                   ("acc1_in", "within +-1 level"), ("acc1_loao", "LOAO +-1 level"),
+                   ("ap_in", "AP within"), ("ap_loao", "AP LOAO"),
+                   ("apn_in", "AP_norm within"), ("apn_loao", "AP_norm LOAO"),
                    ("rho_in", "rho(raw d) within"), ("rho_loao", "rho(raw d) LOAO")]:
         print(f"  {lab:16s} mean {t[c].mean():.3f}   median {t[c].median():.3f}")
 

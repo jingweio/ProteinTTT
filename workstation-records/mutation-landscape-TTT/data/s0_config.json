@@ -1,0 +1,30 @@
+{
+ "assays": [
+  "PSD95_CRIPT_1BE9",
+  "PSD95_Tm2F_1BE9",
+  "5A12_Ang2_fitness_4ZFG",
+  "HLA-A2_TAPBPR_meanscore_5WER",
+  "CD19_FMC63_Fitness_7URV",
+  "CXCR4_CXCL12_enrich_8U4O",
+  "ACE2_SARS2-RBD_enrich_6M17"
+ ],
+ "alphas": [
+  -8.0,
+  -4.0,
+  -2.0,
+  -1.0,
+  -0.5,
+  0.5,
+  1.0,
+  2.0,
+  4.0,
+  8.0
+ ],
+ "seeds": [
+  0,
+  1,
+  2
+ ],
+ "M": 1,
+ "tag": "s0"
+}

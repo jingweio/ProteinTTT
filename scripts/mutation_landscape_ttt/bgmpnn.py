@@ -96,6 +96,20 @@ class AssayContext:
         self.mask_fw = m1d * (1.0 - attend)
         self.h_EXV_fw = self.mask_fw * self.h_EXV_encoder  # (M, L, K, C)
 
+    @torch.no_grad()
+    def set_h_V(self, new_h_V):
+        """Replace the cached encoder node embeddings and rebuild everything derived from them.
+
+        h_EXV_encoder and h_EXV_fw are built FROM h_V, so overwriting h_V alone would leave the
+        decoder reading a stale copy through its forward path -- silently, since shapes match.
+        """
+        assert new_h_V.shape == self.h_V.shape, (new_h_V.shape, self.h_V.shape)
+        self.h_V = new_h_V
+        h_EX = cat_neighbors_nodes(torch.zeros_like(self.model.W_s(self.S_wt[:1])),
+                                   self.h_E, self.E_idx)
+        self.h_EXV_encoder = cat_neighbors_nodes(self.h_V, h_EX, self.E_idx)
+        self.h_EXV_fw = self.mask_fw * self.h_EXV_encoder
+
     def seq_to_S(self, mutated_sequence):
         """Official substitution order: designed chains concatenated, in the order given."""
         S = self.S_wt[:1].clone()

@@ -1,5 +1,9 @@
 # bindingGYM-zero-shot-benchmarking-evaluation — experiment record
 
+> **started 2026-09-11 22:46 · last updated 2026-09-14** · status: benchmark 已完成
+> 本篇是 **tracking** 记录（供查阅，不要求顺读）：逐次运行的 job id / 配置 / bug 根因 / 口径更正史。
+> 面向阅读的结论整理见 [`bgym25_zeroshot_4model_benchmark-organized.md`](./bgym25_zeroshot_4model_benchmark-organized.md)。
+
 > task: `bgym25_zeroshot_4model_benchmark` · created 2026-09-11 22:46 · **status: PLANNED**
 > 锚点实验：[`workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md`](../../workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md)
 

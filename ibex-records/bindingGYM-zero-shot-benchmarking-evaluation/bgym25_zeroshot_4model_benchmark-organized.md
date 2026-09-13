@@ -1,7 +1,8 @@
 # BindingGYM zero-shot benchmark：四个 inverse-folding 模型的 readout 改造与评测
 
-> 整理版 · **最后更新 2026-09-13 09:46**
-> 过程稿（含逐个 bug 的排查时间线）：[`bgym25_zeroshot_4model_benchmark_20260911-224626.md`](./bgym25_zeroshot_4model_benchmark_20260911-224626.md)
+> **started 2026-09-11 22:46 · last updated 2026-09-14** · status: benchmark 已完成
+> 面向读者的整理版；逐次运行的流水与 bug 排查见 tracking 篇。
+> 过程稿（含逐个 bug 的排查时间线）：[`bgym25_zeroshot_4model_benchmark-tracking.md`](./bgym25_zeroshot_4model_benchmark-tracking.md)
 > **本篇按逻辑组织，不按排查顺序。** 想看"当时是怎么一步步查出来的"请看过程稿。
 
 ## 0. 进度总览
@@ -552,6 +553,6 @@ StaB-ddG 真正针对 binding 的是 **stage3（SKEMPI finetune）**，但它与
 
 ## 11. 关联
 - 过程稿（逐个 bug 的排查时间线、env 构建、job 记录）：
-  [`bgym25_zeroshot_4model_benchmark_20260911-224626.md`](./bgym25_zeroshot_4model_benchmark_20260911-224626.md)
+  [`bgym25_zeroshot_4model_benchmark-tracking.md`](./bgym25_zeroshot_4model_benchmark-tracking.md)
   —— 其中**过程稿的 §21** 记录了一次"幂等跳过未校验代码版本 ⇒ 新旧结果混合"的事故，方法论价值较高。
 - 锚点实验：[`workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md`](../../workstation-records/BindingGYM-zero-shot-proteinMPNN/zeroshot_proteinmpnn_20260827-154500.md)

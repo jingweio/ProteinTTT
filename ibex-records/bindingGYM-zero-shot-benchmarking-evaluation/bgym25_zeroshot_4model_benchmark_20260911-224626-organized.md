@@ -283,7 +283,9 @@ ADFLIP 的字母在 `pdb2data` 里丢失，只剩数值 `chain_id` ⇒ 用**链�
 | 1 | **ProteinMPNN**（backbone-only） | **0.3899** | 0.6854 | 0.1552 | 0.7197 |
 | 2 | LigandMPNN（+侧链 ctx） | 0.3771 | 0.6824 | 0.1492 | 0.7189 |
 | 3 | LASErMPNN（全原子 + rotamer） | 0.3757 | 0.6768 | 0.1547 | **0.7263** |
-| 4 | ADFLIP（全原子 flow matching） | 0.3630 | 0.6719 | 0.1372 | 0.7028 |
+| 4 | StaB-ddG **stage1**（其 ProteinMPNN base） | 0.3698 | 0.6774 | 0.1541 | 0.7190 |
+| 5 | ADFLIP（全原子 flow matching） | 0.3630 | 0.6719 | 0.1372 | 0.7028 |
+| 6 | StaB-ddG **stage2**（Megascale finetune） | 0.3545 | 0.6728 | 0.1446 | 0.6965 |
 
 **全部配对检验（Wilcoxon，同 25 assay）** —— 唯一显著的只有一项：
 
@@ -295,7 +297,55 @@ ADFLIP 的字母在 `pdb2data` 里丢失，只剩数值 `chain_id` ⇒ 用**链�
 | LigandMPNN vs LASErMPNN | +0.0013 | 11/25 | 0.5602 |
 | LASErMPNN vs ADFLIP | +0.0127 | 11/25 | 0.5782 |
 
-### 7.2 口径 A（AR-NLL）
+### 7.2 StaB-ddG：Megascale finetune 的纯效应
+
+**有效性**：四个 run 全部 25/25，`code_stamp` 单一值 `1e7eef418c3e`，零退化 assay。
+
+| run | 口径 | Spearman |
+|---|---|---|
+| `stabddg_s1_ar` (base) | A | 0.375986 |
+| `stabddg_s2_ar` (Megascale) | A | 0.356424 |
+| `stabddg_s1_jm` (base) | B | 0.369811 |
+| `stabddg_s2_jm` (Megascale) | B | 0.354515 |
+
+**(a) 先验证对照设计的必要性** —— StaB-ddG 的 base 确实与我们的 anchor 不同：
+```
+stabddg_s1_ar 0.3760  vs  proteinmpnn_ar 0.3899   Δ=-0.0139  正号 7/25  p=0.0516
+```
+只有 7/25 个 assay favor 它，方向一致且接近显著 ⇒ **拿 anchor 直接比 stage2 会把
+「base 不同」与「Megascale finetune」两个效应混在一起**（那样算出来是 −0.0335）。
+
+**(b) Megascale finetune 的纯效应 —— 无显著净变化，但逐 assay 剧烈重排**
+
+```
+口径 A:  mean Δ = -0.0196   median Δ = +0.0143   ← 符号相反!
+         sd = 0.1248        正号 16/25           Wilcoxon p = 0.8740
+口径 B:  mean Δ = -0.0153                        正号 12/25   p = 0.6721
+```
+
+⚠️ **均值与中位数符号相反，均值不是合适的概括量。** 逐 assay 分布：
+
+| 方向 | assay | Δ |
+|---|---|---|
+| 大幅变差 | `CD19_FMC63_7URV` | **−0.4153** |
+| | `5A12_VEGF_4ZFF` | −0.2712 |
+| | `Z-domain_ZpA963_HL1` | −0.1570 |
+| 大幅变好 | `Z-domain_ZSPA-1_LL2` | **+0.1987** |
+| | `4D5_HER2_1N8Z` | +0.0952 |
+| | `GB1_IgG-Fc_1FCC` | +0.0932 |
+
+**`sd = 0.1248` 是解码序噪声 σ(0.0184) 的 7 倍**，13/25 个 assay 的 |Δ| > 0.05
+⇒ 这些变化**远超噪声，是真实的**，只是**方向不一致**。
+均值为负完全由 `CD19` 与 `5A12_VEGF` 两个大幅下跌拉动（去掉 13 个 |Δ|>0.05 的极端值后
+剩余 12 个的 mean = **+0.0160**）。
+
+**结论**：
+> **在 Megascale 稳定性数据上 finetune，对 binding DMS 预测没有显著的净增益或净损害
+> （p = 0.87 / 0.67），但会大幅重排逐 assay 的表现（效应量最大到 0.42，远超噪声）。**
+
+即：**稳定性目标与结合亲和力目标不是同向的，也不是单纯对立的 —— 它是在 assay 之间做交换。**
+
+### 7.3 口径 A（AR-NLL）
 
 | 模型 | Spearman | 备注 |
 |---|---|---|
@@ -303,7 +353,7 @@ ADFLIP 的字母在 `pdb2data` 里丢失，只剩数值 `chain_id` ⇒ 用**链�
 | LigandMPNN | 0.3883 | vs ProteinMPNN：Δ=+0.0016，17/25，p=0.3388（不显著） |
 | LASErMPNN | — | **6/25，未完成**（全量约 16 h，见 §8.2） |
 
-### 7.3 侧链轴（partner 链设为 fixed）
+### 7.4 侧链轴（partner 链设为 fixed）
 
 | | Spearman | AUC | MCC | NDCG | AP |
 |---|---|---|---|---|---|
@@ -331,18 +381,29 @@ ADFLIP 的字母在 `pdb2data` 里丢失，只剩数值 `chain_id` ⇒ 用**链�
 
 ### 8.2 唯一有效的增量来自别处
 
-**让模型看到 partner 的侧链**有显著增益（§7.3：+0.0082，p = 0.0158，五项指标全为正，
+**让模型看到 partner 的侧链**有显著增益（§7.4：+0.0082，p = 0.0158，五项指标全为正，
 且有 4 个零差异的内部对照）。
 
 ⇒ **归纳：在 binding DMS 上起作用的不是「模型把自己看得更细」，而是「模型看得到结合伙伴」。**
 
 注意这两件事**不是一回事**：LigandMPNN/LASErMPNN/ADFLIP 的"更细"是**对整个复合物**建模得更细，
-而 §7.3 的增益特指**把 partner 作为固定上下文喂进去**。前者无效，后者有效。
+而 §7.4 的增益特指**把 partner 作为固定上下文喂进去**。前者无效，后者有效。
 
-**这条归纳还缺第三类证据。** StaB-ddG 是四个模型里**唯一显式建模 binding** 的
-（它算的就是 complex 与两个 binder 之间的 ddG 差）。
-- 若它显著更好 ⇒ 归纳得到最强支持；
-- 若不然 ⇒ 需要重新解释（例如"partner 增益来自上下文而非 binding 目标本身"）。
+### 8.3 StaB-ddG 提供的第三类证据：稳定性目标不能替代结合目标
+
+StaB-ddG stage2 是四个模型里**唯一在与结合相关的热力学量（稳定性 ΔΔG）上做过监督**的。
+若"训练目标更贴近热力学"能帮到 binding DMS，它应当胜出。实测**没有**（§7.2）：
+Megascale finetune **无显著净效应**（p = 0.87 / 0.67），且在 25 个 assay 上**剧烈重排**。
+
+这与 §8.2 的归纳一致，并把它收得更紧：
+> 有用的既不是「**看**得更细」（全原子模型全部打平或更差），
+> 也不是「**训**得更接近热力学」（Megascale 稳定性 finetune 无净增益），
+> 而是「**看得到结合伙伴**」。
+
+⚠️ **一个必须说明的限定**：本工作测的是 stage2（Megascale 稳定性）。
+StaB-ddG 真正针对 binding 的是 **stage3（SKEMPI finetune）**，但它与 BindingGYM 复合物重叠
+⇒ 用它就是 leakage，**因此本 benchmark 无法回答"针对 binding 的监督有没有用"**。
+这条限制是数据集重叠造成的，不是实验设计的疏漏。
 
 ---
 

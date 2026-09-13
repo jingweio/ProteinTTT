@@ -1,0 +1,29 @@
+{
+ "assays": [
+  "PSD95_CRIPT_1BE9",
+  "PSD95_Tm2F_1BE9",
+  "5A12_Ang2_fitness_4ZFG",
+  "HLA-A2_TAPBPR_meanscore_5WER",
+  "CD19_FMC63_Fitness_7URV"
+ ],
+ "lams": [
+  0.03,
+  0.1,
+  0.3,
+  1.0,
+  3.0,
+  10.0,
+  30.0
+ ],
+ "lr": 0.0001,
+ "steps": 300,
+ "bs": 128,
+ "tau": 5.0,
+ "agg": "sum",
+ "mode": "decoder",
+ "M": 5,
+ "sweep_M": null,
+ "seed": 1,
+ "permute_d": false,
+ "tag": "e1b_sum"
+}

@@ -151,7 +151,7 @@ def main():
         assert len(keep) == len(y) == len(w_var), \
             f"{dms}: keep {len(keep)} y {len(y)} w {len(w_var)}"
         S_v, sf_v = S[keep], sf[keep]
-        base = float(np.mean([spearman(sf_v[:, m].numpy(), y) for m in range(a.M)]))
+        base = float(np.mean([spearman(sf_v[:, m].numpy(), y) for m in range(sf_v.shape[1])]))
         base5 = spearman(lab[lab.DMS_id == dms].mpnn_score.to_numpy(float), y)  # official seed1/M=5
 
         if a.permute_d:
@@ -175,9 +175,12 @@ def main():
         curves += log
         if a.sweep_M:        # re-score the winner at the evaluation M
             best_lam = max((r for r in rows if r["DMS_id"] == dms), key=lambda r: r["rho"])["lam"]
-            ctx.M = a.M
-            ctx._build_encoder_cache()
-            sc = run_one(ctx, S_v, w_var, y, frozen_scores(ctx, S_v, bs_eff), best_lam,
+            # M is fixed at construction -- the featurised tensors, the randn and every mask
+            # built from it carry that M -- so the context has to be REBUILT, not relabelled.
+            ctx, S, _ = build(dms, model, a.M, a.seed, dev)
+            S_v = S[keep]
+            sf_v = frozen_scores(ctx, S_v, bs_eff)
+            sc = run_one(ctx, S_v, w_var, y, sf_v, best_lam,
                          a.lr, a.steps, bs_eff, a.mode, dev, a.seed)
             preds[f"{dms}|{best_lam}|M{a.M}"] = sc
             rows.append(dict(DMS_id=dms, lam=best_lam, rho=spearman(sc, y), rho_base=base5,

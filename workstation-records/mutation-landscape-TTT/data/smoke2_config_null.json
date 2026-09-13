@@ -1,0 +1,20 @@
+{
+ "assays": [
+  "PSD95_CRIPT_1BE9"
+ ],
+ "lams": [
+  0.1,
+  0.3
+ ],
+ "lr": 0.0001,
+ "steps": 10,
+ "bs": 128,
+ "tau": 5.0,
+ "agg": "max",
+ "mode": "decoder",
+ "M": 5,
+ "sweep_M": 1,
+ "seed": 1,
+ "permute_d": true,
+ "tag": "smoke2"
+}

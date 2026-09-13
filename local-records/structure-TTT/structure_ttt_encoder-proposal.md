@@ -28,7 +28,37 @@
   ⚠️ 因为是 NLL 求和且不做长度归一化，**跨 assay 的绝对分数不可比**（尺度差 3.3×）；
   只有 assay 内部的排序有意义。
 
-### 1.2 25 / 23 / 14 分别是哪些 assay
+### 1.2 binding-sites 的定义
+
+**不同定义会切出不同的结果，所以先把定义写死。** 全项目统一使用下面这一个：
+
+1. **先把复合物的链分成两个 binding entity**，**依据是元数据、不是结构启发式** ——
+   `DMS_id` 里已经写明了两个结合方（如 `4D5_HER2` = 抗体 4D5 对 HER2），
+   据此把链分到 `entity1` / `entity2`。
+   完整对照表：`/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data/entity_partition.csv`
+   （含 `provenance` 列，标明每一条的来源）。
+   ⚠️ **刻意不用「按接触面自动划分」这类启发式**，因为它在多链复合物上会误判。
+2. **残基级判据**：设残基 `r` 属于 entity `E`，则
+   ```
+   d(r) = min { ‖x_a − x_b‖₂ :  a ∈ 重原子(r),  b ∈ 重原子(另一个 entity 的全部残基) }
+   r ∈ binding-sites   ⟺   d(r) ≤ 5.0 Å
+   ```
+   - **重原子**（含侧链），不是只看 CA；**排除氢**。
+   - 距离是到**另一个 entity**，**不是到「任何其它链」** ——
+     这个区别很重要：抗体的 VH–VL 之间、以及同一 entity 内部的链间接触，**不算界面**。
+     （早期版本用过「任何其它链」的定义，会把 VH–VL packing 误计为界面，已废弃。）
+3. **变体级判据**（供逐 variant 的分析用）：变体 `v` 的所有突变位点里，
+   只要有一个落在 binding-sites 上，就算「碰界面」。
+   连续版本则取 `d(v) = min_i d(p_i)`（或对各位点的 `f(d_i)` 做聚合）。
+
+**逐残基距离的产物**（23+ assay 全链，含 `d(r)` 与 `is_interface_5A`）：
+`/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data/interface_residues_all_chains.csv`
+
+> **cutoff 的敏感性**已单独验证过（4.0 / 4.5 / 5.0 / 6.0 / 8.0 Å 都算了），
+> 5.0 Å 是常用值，结论对它不敏感；各 cutoff 的结果见
+> `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data/variant_labels.parquet` 的 `iface_dist_*` 列。
+
+### 1.3 25 / 23 / 14 分别是哪些 assay
 
 **三套嵌套的 assay 集合**，报任何数字都必须说明用的是哪一套：
 
@@ -88,74 +118,92 @@
 
 ---
 
-## 2. 已知事实：encoder 已经"会"界面 —— 但只在**二值**层面
+## 2. 已知事实：encoder 对界面的编码 —— 二值层面好，细粒度弱
 
-### 2.1 实验是怎么做的
+### 2.1 标签是怎么建的（与 §1.2 **完全同一个定义**）
 
-在 decoder-TTT 之前做过一个前置检查（代号 **G-A**）：
+探针要的是**逐残基**标签，索引必须与 encoder 输出 `h_V` 的行一一对应。
 
-1. 对每个 assay，用**冻结**的 ProteinMPNN encoder 跑一遍它的 WT complex 结构，
-   拿到每个残基的 node embedding `h_V`（**128 维 / 残基**）；
-2. 在 `h_V` 上训一个**线性**模型（logistic regression / ridge），预测该残基的界面属性；
-3. 两种读出各测一次：
-   - **AUC（二值）**：logistic regression 预测「该残基是不是界面残基」，报 ROC-AUC。
-   - **ρ（连续距离）**：ridge regression 预测「该残基到**另一个 entity** 的距离」这个**实数**，
-     然后报**预测距离与真实距离之间的 Spearman 相关**。
-     ⇒ **AUC 衡量「碰不碰」分得开不开；ρ 衡量「多远」估得准不准。**
-4. 两种切分方式：
-   - **within-assay（5-fold）**：在同一个 assay 的残基内部做 5 折交叉验证。
-     回答「**对这个复合物**，信息在不在 `h_V` 里」。
-   - **leave-one-assay-out（LOAO）**：拿其余 13 个 assay 的残基训练，在留出的那个 assay 上测。
-     回答「这个编码是**跨复合物共享**的，还是每个结构各背一套」。
+`h_V` 的第 `i` 行对应 **ProteinMPNN 内部打包顺序**下的第 `i` 个残基：
+`tied_featurize` 按「designed chains 在前、其余在后」拼接，每条链按 **PDB 残基顺序**排列。
+所以标签**直接按 PDB 残基顺序在打包空间里算**即可 —— **完全不涉及 WT 序列**，
+也就没有 WT↔PDB 对齐的问题。用的就是 §1.2 的重原子 5 Å 定义与元数据 entity 划分。
 
-### 2.2 结果
+**但有两处必须排除，否则会静默算错：**
 
-**「中位」= 对 14 个 assay 各算一个值，再取这 14 个值的中位数。**
+1. **缺口填充位**：官方 `parse_PDB` 是按 `range(min_resn, max_resn+1)` 遍历的，
+   **晶体学缺失的残基号会被补成一个 `X` 残基、坐标为 NaN**；
+   随后 `tied_featurize` 执行 `X[isnan] = 0.`，于是这些位置**带着坐标 (0,0,0) 进入 encoder**，
+   同时 `mask` 被置 0。
+   ⚠️ **它们在 `h_V` 里占着行，但不是真实残基** —— 若不排除，会被当作「离所有东西都很远」的残基。
+   实测占比：`KRAS_PICK3CG-RBD` **17.3%**、`CD19_FMC63` 10.5%、`HLA-A2_TAPBPR` 9.6%，其余 assay 为 0。
+2. **`mask == 0` 的位置**：`tied_featurize` 自己标出的无效位。
 
-| | 中位 AUC（二值：碰 / 不碰） | 中位 ρ（连续：离 partner 多远） |
-|---|---:|---:|
-| **within-assay（5-fold）** | **0.890** | **0.483** |
-| **leave-one-assay-out** | **0.915** | 0.404 |
+> 🔴 **这是一次真实的返工。** 最初的探针（`ga_encoder_probe.py`）为了「绕开对齐」改用了
+> **CA–CA 距离 + 8 Å**，并且**没有排除上述填充位**。两处都不必要也不正确：
+> 前者的理由（要做 WT 对齐）根本不成立，后者是个静默 bug。
+> 现行版本 `ga2_encoder_probe.py` 用重原子 5 Å 并排除填充位，**下面的数字都来自它**。
+> 修正后核心结论方向不变，但数值有变化（AUC within 由 0.875 降到 **0.842**）。
+
+### 2.2 两种读出分别是怎么算的
+
+对每个 assay，用**冻结**的 encoder 跑一遍它的 WT complex，拿到每残基 128 维的 `h_V`，
+在其上训**线性**模型（特征先按维度做标准化）：
+
+| 读出 | 模型 | 目标 | 报什么 |
+|---|---|---|---|
+| **AUC（二值）** | logistic regression | `1[d(r) ≤ 5 Å]` | ROC-AUC |
+| **ρ（连续）** | **ridge regression（α=1）** | **`d(r)` 这个实数**（单位 Å，不做变换） | **预测值与真实 `d(r)` 之间的 Spearman 秩相关** |
+
+**⇒ AUC 衡量「碰不碰」分得开不开；ρ 衡量「多远」估得准不准。**
+ρ 用 Spearman 而不是 R²，是因为我们关心的是**能否把残基按远近排对**，
+而不是能否还原 Å 的绝对数值。
+
+两种切分：
+
+- **within-assay（5-fold）**：在同一个 assay 的残基内部做 5 折交叉验证，
+  报出的是**留出折**上的预测。回答「**对这个复合物**，信息在不在 `h_V` 里」。
+- **leave-one-assay-out（LOAO）**：用其余 13 个 assay 的**全部**残基训练，在留出的那个上测。
+  回答「这个编码是**跨复合物共享**的，还是每个结构各背一套」。
+
+### 2.3 结果
+
+**逐 assay 明细**（`L` = 复合物总残基数；「排除」= 缺口填充位 + `mask=0`）：
+
+| assay | L | 排除 | 参与探针的残基 | 界面比例 | AUC within | AUC LOAO | ρ(d) within | ρ(d) LOAO |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `5A12_Ang2_fitness_4ZFG` | 652 | 4 | 648 | 0.056 | 0.875 | 0.879 | 0.586 | 0.065 |
+| `ACE2_SARS2-RBD_enrich_6M17` | 931 | 0 | 931 | 0.046 | 0.951 | 0.970 | 0.601 | 0.373 |
+| `CD19_FMC63_Fitness_7URV` | 497 | 52 | 445 | 0.092 | 0.911 | 0.886 | 0.636 | 0.204 |
+| `CXCR4_CXCL12_enrich_8U4O` | 360 | 0 | 360 | 0.169 | 0.820 | 0.851 | 0.557 | 0.423 |
+| `GB1_IgG-Fc_fitness_1FCC` | 262 | 0 | 262 | 0.137 | 0.946 | 0.940 | 0.432 | 0.456 |
+| `HLA-A2_TAPBPR_meanscore_5WER` | 644 | 62 | 582 | 0.124 | 0.891 | 0.897 | 0.677 | 0.449 |
+| `KRAS_PICK3CG-RBD_norfitness_1HE8` | 1107 | 192 | 915 | 0.038 | 0.918 | 0.946 | 0.390 | 0.144 |
+| `KRAS_RAF1-RBD_norfitness_6VJJ` | 245 | 0 | 245 | 0.127 | 0.829 | 0.968 | 0.293 | 0.445 |
+| `KRAS_RAF1_norfitness_6VJJ` | 245 | 0 | 245 | 0.127 | 0.829 | 0.968 | 0.293 | 0.445 |
+| `KRAS_RALGDS-RBD_norfitness_1LFD` | 254 | 0 | 254 | 0.110 | 0.844 | 0.958 | 0.489 | 0.357 |
+| `PSD95_CRIPT_1BE9` | 120 | 0 | 120 | 0.167 | 0.713 | 0.820 | 0.331 | 0.441 |
+| `PSD95_Tm2F_1BE9` | 120 | 0 | 120 | 0.175 | 0.692 | 0.824 | 0.326 | 0.453 |
+| `SARS2-RBD_ACE2_deltaKd_6M0J` | 791 | 0 | 791 | 0.054 | 0.885 | 0.948 | 0.247 | 0.174 |
+| `hYAP65_peptide_FunctioncalScore_1JMQ` | 56 | 0 | 56 | 0.339 | 0.688 | 0.824 | 0.375 | 0.625 |
+| **mean（14 assay 未加权）** | | | | 0.126 | **0.842** | **0.905** | **0.445** | **0.361** |
+| *median* | | | | *0.125* | *0.859* | *0.918* | *0.411* | *0.432* |
 
 **三条结论：**
 
-1. **二值界面信息已经在 `h_V` 里，且线性可读。** AUC 0.890 远高于随机的 0.5。
-2. **这个编码是跨复合物共享的** —— LOAO（0.915）比 within-assay（0.890）**还高**，
-   因为 LOAO 用了 13 个 assay 的数据训练，样本多 13 倍。
+1. **二值界面信息在 `h_V` 里，且线性可读** —— AUC 均值 **0.842**（随机为 0.5）。
+2. **这个编码跨复合物共享** —— LOAO 均值 **0.905**，**比 within-assay 的 0.842 还高**，
+   因为 LOAO 用了 13 个 assay 的残基训练、样本多一个量级。
    若编码是每个结构各背一套，LOAO 应当明显更差。
-3. 🔴 **但细粒度明显更弱** —— `h_V` 对「碰不碰」编码得好（AUC 0.890），
-   对「多远」编码得差（ρ 0.483），LOAO 下还有 **2/14 个 assay 的连续 ρ 为负**
-   （`CD19_FMC63_Fitness_7URV`、`KRAS_PICK3CG-RBD_norfitness_1HE8`）。
+3. 🔴 **细粒度明显更弱** —— 「多远」的 ρ 均值只有 **0.445**（within）/ **0.361**（LOAO），
+   而「碰不碰」的 AUC 是 0.842 / 0.905。
    **这正是 structure-TTT 可能有空间的地方。**
 
-### 2.3 这个探针用的界面定义，和别处**不一样**（口径说明）
+> **为什么同时给 mean 和 median**：BindingGYM 的官方口径是**逐 assay 指标取未加权平均**，
+> 所以 **mean 是主指标**；median 一并列出只是为了看分布有没有被个别 assay 拉偏。
+> 本例两者差别不大（AUC within 0.842 vs 0.859）。
 
-**别处（所有变体级分析）用的定义**：残基 `r` 的任一**重原子**到**另一个 entity** 的任一重原子
-的最小距离 ≤ **5.0 Å**，即为界面残基。entity 的划分**由元数据确定**（DMS_id 里写明了两个结合方，
-不是靠结构启发式猜的）。
-
-**G-A 这个探针用的是**：**CA–CA 距离 + 8 Å 阈值**。
-
-**为什么要不一样 —— 这是刻意的：**
-
-- `h_V` 的第 `i` 行对应的是 **ProteinMPNN 内部打包顺序**下的第 `i` 个残基
-  （`tied_featurize` 按「designed chains 在前、其余在后」拼接，用的是 **PDB 链的序列**）。
-- 而重原子界面标签（`interface_residues_all_chains.csv`）是按 **WT 序列位置**索引的。
-- **这两套索引不是同一个东西** —— 中间隔着一次 WT 序列 ↔ PDB 残基的比对，
-  有偏移、有 gap，而且是**已知会静默出错**的地方（见 §3 第 1 条）。
-- G-A 要回答的问题是「**`h_V` 里有没有界面信息**」，**这个问题不需要精确到重原子**。
-  所以直接在 `h_V` 自己的打包空间里、用 `ctx.X[:, :, 1]`（CA 坐标）算距离，
-  **整个对齐环节被绕开了**，结果不可能因为 off-by-one 而错。
-- 8 Å 而不是 5 Å：CA–CA 距离系统性地大于重原子最小距离（两个残基的重原子可以贴到 5 Å，
-  而它们的 CA 仍相距 ~8 Å），8 Å 是一个粗略但合理的等价阈值。
-
-**⇒ 如果你要用重原子级的精细标签**（比如做距离回归的监督信号），
-可以用 `interface_residues_all_chains.csv`（里面有逐残基的重原子最小距离），
-**但你必须自己把它对齐到 `h_V` 的打包索引上**，并自己验证对齐正确（见 §3 第 1、2 条）。
-
----
-
-## 3. 支持这个方向的证据：encoder 编码得越好的 assay，zero-shot 就越好
+## 3. 一条方向性证据：encoder 编码得越好的 assay，zero-shot 倾向于越好（**未达显著**）
 
 ### 3.1 具体测了什么
 
@@ -173,35 +221,60 @@
 
 ### 3.2 结果
 
-| 探针指标 | 对照量 | Spearman | p |
+| 探针指标 | 对照量 | Spearman | **p 值** |
 |---|---|---:|---:|
-| **`AUC_within`（二值界面）** | **`ρ_zeroshot`** | **+0.730** | **0.003** ✅ |
-| `ρ_within`（连续距离） | `ρ_zeroshot` | +0.172 | 0.557 |
-| `AUC_within` | headroom（该 assay 还剩多少提升空间） | −0.198 | 0.497 |
+| **`AUC_within`（二值界面）** | **`ρ_zeroshot`** | **+0.519** | **0.057** |
+| `ρ_within`（连续距离） | `ρ_zeroshot` | −0.128 | 0.664 |
+
+**`p` 是什么**：在「两者其实毫无关系」这个零假设下，仅凭随机涨落也能得到
+**不小于观测到的 |Spearman|** 的概率。`p = 0.057` 意思是：如果 encoder 质量与 zero-shot
+表现真的无关，那么 14 个 assay 上出现 ≥ 0.519 这么强的相关，有约 **5.7%** 的机会纯属偶然。
+习惯上以 0.05 为界，**所以 0.057 是「接近显著但没过线」**。
+
+**逐 assay 明细**（按 zero-shot 从高到低）：
+
+| assay | `ρ_zeroshot` | `AUC_within` | `ρ_within` |
+|---|---:|---:|---:|
+| `SARS2-RBD_ACE2_deltaKd_6M0J` | 0.6967 | 0.885 | 0.247 |
+| `CD19_FMC63_Fitness_7URV` | 0.6032 | 0.911 | 0.636 |
+| `KRAS_RALGDS-RBD_norfitness_1LFD` | 0.5872 | 0.844 | 0.489 |
+| `KRAS_PICK3CG-RBD_norfitness_1HE8` | 0.5020 | 0.918 | 0.390 |
+| `GB1_IgG-Fc_fitness_1FCC` | 0.5005 | 0.946 | 0.432 |
+| `KRAS_RAF1_norfitness_6VJJ` | 0.4871 | 0.829 | 0.293 |
+| `KRAS_RAF1-RBD_norfitness_6VJJ` | 0.4413 | 0.829 | 0.293 |
+| `HLA-A2_TAPBPR_meanscore_5WER` | 0.4116 | 0.891 | 0.677 |
+| `PSD95_CRIPT_1BE9` | 0.3672 | 0.713 | 0.331 |
+| `ACE2_SARS2-RBD_enrich_6M17` | 0.2760 | 0.951 | 0.601 |
+| `CXCR4_CXCL12_enrich_8U4O` | 0.2014 | 0.820 | 0.557 |
+| `PSD95_Tm2F_1BE9` | 0.1944 | 0.692 | 0.326 |
+| `5A12_Ang2_fitness_4ZFG` | 0.1074 | 0.875 | 0.586 |
+| `hYAP65_peptide_FunctioncalScore_1JMQ` | 0.0886 | 0.688 | 0.375 |
+| **mean** | **0.3903** | **0.842** | **0.445** |
 
 ### 3.3 怎么解读
 
-**正面**：
-`+0.730 / p=0.003` 是一个**强且显著**的正相关（n=14）。
-它说明：**encoder 对界面的编码质量，和 ProteinMPNN 在该 assay 上的 zero-shot 表现，是同向的。**
-这是「改善 encoder 的界面表征 → 改善 zero-shot」这条因果链的**必要条件**，而且它成立了。
+**⚠️ 先说一条更正**：这个相关最初报的是 **+0.730 / p=0.003（显著）**。
+那是用**有 bug 的探针**（CA–CA 8 Å + 未排除缺口填充位，见 §2.1）算的。
+**用修正后的探针重算，降到 +0.519 / p=0.057，不再显著。**
 
-**但这是相关，不是因果。** 至少有三个混淆项必须警惕，它们可能**同时**驱动这两个量：
+**因此现在能说的是**：
+`AUC_within` 与 `ρ_zeroshot` **呈中等强度的正相关，方向一致，但在 n=14 上未达统计显著**。
+它**支持但不证实**「改善 encoder 的界面表征 → 改善 zero-shot」这条链。
+
+**即便它显著，也只是相关，不是因果。** 至少三个混淆项可能**同时**驱动这两个量：
 
 1. **结构质量** —— 分辨率高、缺失残基少的结构，encoder 编码得好是自然的，
    同时 ProteinMPNN 打分也更可靠。
-2. **复合物大小 `L`** —— 大复合物的残基数多，探针训练样本多、AUC 可能偏高；
-   同时 `L` 也影响打分的尺度与方差。
-3. **assay 本身的噪声水平** —— DMS 实验噪声大的 assay，`ρ_zeroshot` 的上限本来就低，
-   与 encoder 无关。
+2. **复合物大小 `L`** —— 残基数多则探针训练样本多、AUC 可能偏高；`L` 也影响打分的尺度与方差。
+3. **assay 本身的噪声水平** —— DMS 噪声大的 assay，`ρ_zeroshot` 上限本来就低，与 encoder 无关。
 
-**⇒ 若要把这条证据从「相关」推进到「支持因果」**，最直接的办法是做**干预**：
-不训练，直接人为改动冻结的 `h_V`（例如沿探针学到的界面方向加一个可控幅度的扰动），
-重新打分，看 per-assay Spearman 是否随之变化。这只需要前向打分，不需要训练。
+**要把「相关」推进到「支持因果」，最直接的是做干预**：不训练，直接人为改动冻结的 `h_V`
+（例如沿探针学到的界面方向加一个可控幅度的扰动），重新打分，看 per-assay Spearman 是否随之变化。
+这只需要前向打分。
 
-**反面参照**：`ρ_within`（连续距离）与 `ρ_zeroshot` 的相关只有 `+0.172, p=0.557`，**不显著**。
-所以目前这条证据**只支持「二值界面编码质量」这一层**，
-**细粒度距离编码与 zero-shot 表现之间的关系尚未被证实**。
+**反面参照**：`ρ_within`（连续距离）与 `ρ_zeroshot` 的相关是 **−0.128, p=0.664**，
+不但不显著、方向还是反的。
+⇒ **目前这条证据只覆盖「二值界面编码质量」，细粒度距离编码与 zero-shot 表现之间没有观察到关系。**
 
 ---
 
@@ -211,12 +284,23 @@
 
 ### 4.1 索引与对齐
 
-1. **WT 序列位置 ↔ PDB 残基索引不是一回事。** 有偏移、有 gap。
+1. 🔴 **`parse_PDB` 会把晶体学缺口补成假残基。** 它按 `range(min_resn, max_resn+1)` 遍历，
+   缺失的残基号被补成 `X` + NaN 坐标，随后 `tied_featurize` 执行 `X[isnan] = 0.`
+   ⇒ **这些位置带着坐标 (0,0,0) 进入模型**，在 `h_V` 里占着行但不是真实残基（`mask` 被置 0）。
+   实测占比最高 **17.3%**（`KRAS_PICK3CG-RBD`）。
+   **任何逐残基的分析都必须先按 `mask` 和「是否为填充位」过滤。**
+   （这条已经造成过一次真实的静默错误，见 §2.1。）
+2. **官方 `parse_PDB` 与自己写的 PDB 解析器，残基列表会不一致**（实测 **9/25** 个结构不同）。
+   除了上一条的缺口填充，它还会 `if resi not in alpha_3: continue` 丢掉非标准残基，
+   并把 `HETATM MSE` 当作 `ATOM`。**跨解析器映射索引之前必须逐链比对序列并 assert。**
+3. **WT 序列位置 ↔ PDB 残基索引不是一回事。** 有偏移、有 gap。
    实测案例：`6VJJ` 有 **+1 偏移**；`4ZFF` / `4ZFG` 带 **Kabat insertion code**（残基号形如 `100A`）。
    解析 PDB 时残基 id 必须取 `line[22:26].strip() + line[26].strip()`，否则 insertion code 被吞掉。
-2. **`tied_featurize` 的打包顺序是「designed chains 在前，其余在后」**，
+   ⚠️ **但逐残基的标签根本不需要这个映射** —— `h_V` 按 PDB 残基索引，直接在 PDB 空间算即可。
+   早先为「绕开对齐」而改用 CA–CA 距离是不必要的（见 §2.1）。
+4. **`tied_featurize` 的打包顺序是「designed chains 在前，其余在后」**，
    且用的是 **PDB 链序列**长度，不是 WT 序列长度。`h_V` 的行索引跟着这个顺序走。
-3. **数据对齐后必须按文件数 / 行数核对**，不能只 `test -f`。
+5. **数据对齐后必须按文件数 / 行数核对**，不能只 `test -f`。
    曾经出现过 symlink 指向 worktree 外部、rsync 过去变成断链，而 `ls | wc -l` 只显示 1 的情况。
 
 ### 4.2 实验设计
@@ -268,7 +352,8 @@
 | 东西 | 绝对路径 |
 |---|---|
 | **可微打分 + encoder 缓存**（`AssayContext` 已缓存 encoder 输出，改 `h_V` 后只需跑 decoder） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/bgmpnn.py` |
-| **encoder 线性探针**（G-A，§2 的来源） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/ga_encoder_probe.py` |
+| **encoder 线性探针（现行，重原子 5 Å，已排除缺口）** | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/ga2_encoder_probe.py` |
+| *旧版探针（CA–CA 8 Å，含缺口填充位；仅供追溯，勿用）* | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/ga_encoder_probe.py` |
 | **no-op 对照**（验证打分函数与官方逐行一致） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/gb_noop_control.py` |
 | 官方 `protein_mpnn_utils.py` 的 vendored 副本（md5 `56fc8e171b6d97dc9a048259f4eb3a77`） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/mutation_landscape_ttt/vendor/protein_mpnn_utils.py` |
 | 界面计算流程（entity 划分、逐残基距离） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/scripts/binding_sites/` |
@@ -281,7 +366,8 @@
 | **entity 划分**（由元数据确定，非结构启发式） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data/entity_partition.csv` |
 | 逐 variant 的界面标签 + MPNN zero-shot 分数（376,424 行） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis-pred/data/variant_labels_with_mpnn.parquet` |
 | **逐突变位点**距离（1,173,273 对，可换任意聚合方式） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/local-records/binding-sites-analysis/data/variant_site_dists.parquet` |
-| G-A 探针的逐 assay 结果（§2 的原始数据） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/ga_encoder_probe.csv` |
+| G-A 探针逐 assay 结果（**现行**，§2 的原始数据） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/ga2_encoder_probe.csv` |
+| 各 assay 被排除的残基数（缺口填充位统计） | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/ga2_coverage.csv` |
 | 逐 assay 的 zero-shot ρ 与其他参照量 | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/t4_per_assay_bars.csv` |
 | 14-assay 集合的推导与逐 assay 明细 | `/home/guoj0f/repos/ProteinTTT/.claude/worktrees/bindingGYM-binding-sites-analysis/workstation-records/mutation-landscape-TTT/data/g1e_canonical14.csv` |
 

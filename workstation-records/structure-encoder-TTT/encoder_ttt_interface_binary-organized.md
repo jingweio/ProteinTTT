@@ -26,12 +26,18 @@
 ## 2. 系统
 
 ```
-WT complex X ──[encoder E_θ]──→ h_V (L×128) ──┬─→ [probe head g_ψ] ──→ 界面 logits   ← TTT 在这里训
-                                              │                                        (零 DMS label)
-                                              └─→ [decoder D_φ，全程冻结] ──→ score(v) ← 只在评测用
-                                                                                 │
-                                                              per-assay Spearman → 14-assay 未加权平均 = ρ
+                            ┌─→ h_V  (L×128)    ─┬─→ [probe head g_ψ] ──→ 界面 logits  ← 训练信号（零 DMS label）
+WT complex X ─[encoder E_θ]─┤                    │
+                            └─→ h_E  (L×K×128) ─┴─→ [decoder D_φ，全程冻结] ──→ score(v)  ← 只在评测用
+                                 K = k_neighbors = 48                              │
+                                                        per-assay Spearman → 14-assay 未加权平均 = ρ
 ```
+
+🔴 **`encoder` 输出的是 `h_V` 和 `h_E` 两个量，而 probe 只看得见 `h_V`，decoder 两个都吃。**
+`EncLayer.forward` 每层交替更新两者（先用 `(h_V,h_E)` 更新 `h_V`，再用**新的** `h_V` 更新 `h_E`），
+所以**微调 encoder 必然同时改变两者，无法只动其一**。decoder 侧 `h_E` 走两条路径
+（`h_ES` 带突变序列 embedding 进 `bw` 项；`h_EX_encoder` 序列位清零进 `fw` 项），`h_V` 也走两条
+（decoder 的初始 node 状态；经 `h_EXV_encoder` 进 `fw` 项）。**这个不对称直接决定了 §2.2 的 anchor 怎么写。**
 
 > **规模**：encoder 侧可训练参数 **907,776 / 1,660,485 = 54.7%**，比 decoder 侧（41.9%）还多 ——
 > **容量不是这条线的瓶颈**。
@@ -40,7 +46,8 @@ WT complex X ──[encoder E_θ]──→ h_V (L×128) ──┬─→ [probe h
 
 | 符号 | 定义 | **训练时可见吗** |
 |---|---|---|
-| `h_V` | encoder 输出，每残基 128 维；`L` = 复合物打包后的残基槽位数（56–1107） | — |
+| `h_V` | encoder 的 **node** 输出，每残基 128 维；`L` = 复合物打包后的残基槽位数（56–1107） | — |
+| `h_E` | encoder 的 **edge** 输出，`(L, K=48, 128)` —— **元素数是 `h_V` 的 48 倍**；probe 看不见它，decoder 看得见 | — |
 | `y_r` | `1[ d(r) ≤ 5.0 Å ]`，`d(r)` = 残基 `r` 的重原子到**另一个 entity** 全部重原子的最小距离 | ✅ **可见** —— 由**结构 + 元数据 entity 划分**算出，**不含任何 DMS label** |
 | `π` | 该 assay 的界面残基比例（0.038–0.339，均值 0.126） | ✅ 可见（同上） |
 | `θ` | encoder 参数 | 被训练 |
@@ -58,10 +65,18 @@ L(θ,ψ) = L_probe + λ · L_anchor
 
 L_probe  = −(1/L') Σ_r [ w_pos · y_r · log p_r + (1−y_r) · log(1−p_r) ]     p_r = σ( g_ψ(h_V,r) )
            w_pos = (1−π)/π                                  ← 类别不平衡校正，逐 assay 算
-L_anchor = ‖ h_V(θ) − h_V^frozen ‖²_F / (L'·128)            ← 防塌缩，按元素归一使 λ 跨 assay 可比
+L_anchor = ‖ h_V(θ) − h_V^frozen ‖²_F / (L'·128)            ← node 项
+         + ‖ h_E(θ) − h_E^frozen ‖²_F / (L'·K·128)          ← edge 项，K = 48
 ```
 
 `L'` = 有效残基数（已剔除缺口填充位与 `mask==0`，见 §5.1）。
+两项**各自按元素数归一**到「每元素平均平方偏移」这个同一尺度，所以先按 1:1 相加，
+也使 λ 在 `L` 相差 20 倍的 assay 之间可比。是否需要额外的相对权重，pilot 里看。
+
+> 🔴 **anchor 为什么必须覆盖 `h_E`**（2026-09-14 review 抓出的设计缺陷，原方案只写了 node 项）：
+> `L_probe` 只读 `h_V`，所以训练信号**只直接作用于 node**；但 `h_E` 照样在变（§2 图下方），
+> 而且**两条路径直达 decoder**。只锚 `h_V` 的话，优化可以在 `h_V` 几乎不动的情况下
+> 把 `h_E` 改得面目全非，**而 anchor 完全察觉不到** —— 没人看管的那部分，元素数还是被看管部分的 **48 倍**。
 
 **每个组件对应 hypothesis 的哪一环：**
 
@@ -69,7 +84,8 @@ L_anchor = ‖ h_V(θ) − h_V^frozen ‖²_F / (L'·128)            ← 防塌�
 |---|---|---|
 | `L_probe` 二分类 | **直接把 `q` 往上推** —— 它就是 `AP_norm` 那个任务的训练版 | 没有驱动力 |
 | **`w_pos=(1−π)/π`** | 让正负类总权重相等。界面是少数类（最低 3.8%），不加权则梯度被多数类主导，**AUC 好看而 AP_norm 不动** —— 而优化空间恰在 AP_norm | 训了等于没训 |
-| `λ·L_anchor` | 防塌缩。按 §5.2 的教训先问「完美优化会怎样」：`L_probe` 被完美优化会让 `h_V` 向 `y_r` 这一维对齐，极端情形塌缩成界面标签的函数，**decoder 拿到的信息反而变少**（同类塌缩实测过，落到 **0.2564**，比基线差 0.13） | 大概率塌缩 |
+| `λ·L_anchor`（node 项） | 防塌缩。按 §5.2 的教训先问「完美优化会怎样」：`L_probe` 被完美优化会让 `h_V` 向 `y_r` 这一维对齐，极端情形塌缩成界面标签的函数，**decoder 拿到的信息反而变少**（同类塌缩实测过，落到 **0.2564**，比基线差 0.13） | 大概率塌缩 |
+| **`λ·L_anchor`（edge 项）** | 看管 `h_E`。它**不在 probe 的视野里却直达 decoder**，且元素数是 `h_V` 的 **48 倍** | `h_E` 可以任意漂移而 loss 无感，增益/损伤都无法归因 |
 | decoder 冻结 | 保证增益归因于 encoder 表征，而不是打分头重新拟合 | 无法归因 |
 
 **`w_pos` 的实际量级**：π 从 0.038（`KRAS_PICK3CG-RBD`）到 0.339（`hYAP65`）
@@ -132,11 +148,13 @@ P1/P2 给出单一共享超参 → M1 才不是逐 assay 调参；M1 拿到增�
 ### 5.2 实验设计
 - **先问「这个 loss 被完美优化会怎样」** —— 已在 §2.2 回答，结论是必须有 anchor。
 - **任何「取最大」的量都要配 null** ⇒ M2 存在的理由。
-- **`h_E` 也必须重建**（本次新发现的实现陷阱）：
-  `AssayContext` 把 encoder 输出缓存为 `h_V` **和 `h_E`**，并由二者构造 `h_EXV_encoder` / `h_EXV_fw`。
-  现成的 `set_h_V()` **只替换 `h_V`** —— 那是为「编辑表征」的干预写的。
-  **重训 encoder 后 `h_E` 同样改变**，只调 `set_h_V()` 会静默沿用旧的 `h_E`。
+- **`h_E` 也必须重建**（实现陷阱，与 §2.2 的 anchor 缺陷同源）：
+  `AssayContext` 把 encoder 输出缓存为 `h_V` **和 `h_E`**，并由二者构造 `h_EXV_encoder` / `h_EXV_fw`；
+  `score()` 里也直接用 `self.h_E` 拼 `h_ES`。现成的 `set_h_V()` **只替换 `h_V`** —— 它是为「编辑表征」
+  的干预写的。**重训 encoder 后 `h_E` 同样改变**（`EncLayer` 每层 `return h_V, h_E`），
+  只调 `set_h_V()` 会让 `h_E` 的**两条 decoder 路径全都沿用旧值**，且无任何报错。
   ⇒ TTT 后必须**用新权重重跑 `_build_encoder_cache`**（等价于用同一个 `randn` 重建 `AssayContext`）。
+  > 同一件事的两个面：**评测侧**忘了重建 `h_E` ⇒ 读到的是旧表征；**训练侧**忘了锚 `h_E` ⇒ 它无人看管地漂移。
 - **两臂必须共用解码顺序**：`AssayContext.__init__` 接受 `randn=`，显式传入同一个 `randn`。
   这同时绕开了「TTT 的 `model.train()` 触发 dropout、推走 CUDA philox 流导致两臂不配对」那个坑。
 - **口径**：本文档所有数字一律 **14 assay，基线 0.3903**。不与 23/25 口径的数字并列。

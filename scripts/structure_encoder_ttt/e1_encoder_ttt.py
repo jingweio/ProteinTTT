@@ -194,7 +194,7 @@ def run_ttt(model, ctx, y, ok, S_all, sf_per_m, sf_mean, args, log):
         # compare against the SAME decoding order(s), so the anchor is exactly 0 at step 0
         ref = sf_m[ms][:, sel].mean(0)
         l_anchor = ((st - ref) ** 2).mean() / var_sf
-        loss = l_probe + args.lam * l_anchor
+        loss = args.probe_weight * l_probe + args.lam * l_anchor
         opt.zero_grad(); loss.backward(); opt.step()
         if step % max(1, args.steps // 10) == 0 or step == args.steps - 1:
             hist.append(dict(step=step, probe=float(l_probe), anchor=float(l_anchor),
@@ -268,6 +268,9 @@ def main():
     ap.add_argument("--lam", type=float, default=1.0)
     ap.add_argument("--anchor_batch", type=int, default=32,
                     help="variants per step used for the score anchor")
+    ap.add_argument("--probe_weight", type=float, default=1.0,
+                    help="0 = anchor only. The permutation null still bought 88%% of the gain, "
+                         "so this asks whether ANY probe signal is needed at all")
     ap.add_argument("--anchor_M", type=int, default=1,
                     help="decoding orders per training step (1 = sample one, else all M)")
     ap.add_argument("--head_lr", type=float, default=1e-2)

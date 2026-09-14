@@ -11,7 +11,33 @@
 
 | 日期 | 任务 | SLURM job | wall | 配置 | 产出 | 结果 |
 |---|---|---|---|---|---|---|
-| 2026-09-14 | **T0 no-op gate**（ibex 首个作业） | **51886003** | — | `--steps 0 --M 5 --seed 1 --batch 64`，3 个 pilot assay | `ibex-records/structure-encoder-TTT/data/t0_noop_per_assay.csv` | ⏳ PENDING (Priority) |
+| 2026-09-14 | **T0 no-op gate**（ibex 首个作业） | **51886003** | **2:04** | `--steps 0 --M 5 --seed 1 --batch 64`，3 个 pilot assay | `data/t0_noop_per_assay.csv` | ✅ **四项全过** |
+
+**T0 结果（2026-09-14，node 驱动 570.86.15，A100-SXM4-80GB，MaxRSS 4.07 GB）**
+
+| 检查 | 结果 |
+|---|---|
+| cu117 能否在该驱动上 launch kernel | ✅ `cuda check: 61479.859375`（真实 matmul，非版本号推断） |
+| ckpt md5 | ✅ `load_model` 的断言通过 |
+| `--steps 0` 分数逐行不变 | ✅ **`max\|Δscore\| = 0.000e+00`**（容差 1e-6） |
+| baseline ρ vs 换平台前记录值 | ✅ **`max\|d\| = 0.0020`** |
+
+| assay | ibex `rho_base` | 记录 `ref` | 差 |
+|---|---:|---:|---:|
+| `5A12_Ang2_fitness_4ZFG` | 0.1093 | 0.1074 | +0.0019 |
+| `PSD95_CRIPT_1BE9` | 0.3677 | 0.3672 | +0.0005 |
+| `CD19_FMC63_Fitness_7URV` | 0.6032 | 0.6032 | **0.0000** |
+
+⚠️ **换平台后不是逐位可复现，只是在噪声内一致。** `CD19` 完全相同说明 `randn` 的生成是一致的；
+另两个的 0.0019/0.0005 远在噪声底之内（per-assay seed σ 中位 **0.0184**），但**不为零**。
+对本实验无影响（两臂共用同一 `randn`、内部配对），但**不可声称跨平台逐位复现**。
+
+**成本标定（据此外推，替换 organized 附录 B 的先验估计）**：
+`CD19` 3,886 variant / L=497 / M=5 耗 **78 s** ⇒ **≈20 ms/variant**。
+14-assay 全量 227,652 variant ⇒ **≈1.3 GPU-h/臂**（原估 2.5，偏保守约 2×）。
+内存 4.07 GB ⇒ `--mem=64G` 过量，后续作业降到 `32G` 以利排队。
+
+| 2026-09-14 | **P1 λ 扫描** | **51886700** | — | lr=1e-4 steps=150 固定，λ ∈ {1,10,100,1000}，3 个 pilot assay | `data/p1_lam*_per_assay.csv` | ⏳ |
 
 **T0 一次验四件事**：① a100 + `torch 1.13.1+cu117` 在该节点驱动上能真正 launch kernel；
 ② ckpt md5 断言通过；③ `--steps 0` 时分数与 baseline **逐行相同**（容差 1e-6）；

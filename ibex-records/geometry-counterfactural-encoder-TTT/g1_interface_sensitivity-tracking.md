@@ -7,7 +7,30 @@
 
 | 日期 | 任务 | SLURM job | wall | 配置 | 产出 | 结果 |
 |---|---|---|---|---|---|---|
-| 2026-09-15 | **G-1 interface sensitivity** | **51897603** | — | `--M 5 --seed 1 --reps 3`，**14 assay 全量** | `data/g1_interface_sensitivity.csv` | ⏳ |
+| 2026-09-15 | **G-1 interface sensitivity** | **51897603** | **0:29** | `--M 5 --seed 1 --reps 3`，**14 assay 全量** | `data/g1_interface_sensitivity.csv` | ✅ **PASS，信号很强** |
+| 2026-09-15 | **G-2 pull vs slide** | **51897764** | — | `--reps 5 --mags 0.5 1 2 4`，14 assay | `data/g2_pull_vs_slide.csv` | ⏳ |
+
+**G-1 结果（14 assay，sanity `max|gap| = 3.662e-04` ⇒ 扰动代码正确）**
+
+| 扰动 | gap (nats) | **gap / sd_mpnn** | 正的 assay |
+|---|---:|---:|:--:|
+| translate 0.5 Å | +0.904 | **+0.247** | 11/14 |
+| translate 1.0 Å | +4.034 | **+1.303** | 13/14 |
+| translate 2.0 Å | +13.524 | +4.615 | 14/14 |
+| translate 4.0 Å | +24.048 | +8.623 | 14/14 |
+| translate 8.0 Å | +38.793 | +14.030 | 14/14 |
+| rotate 2° | +0.603 | +0.153 | 12/14 |
+| rotate 5° | +3.346 | **+1.004** | 13/14 |
+| rotate 10° | +9.584 | +3.208 | 14/14 |
+
+✅ **前提风险被推翻**：在仍然 plausible 的小扰动区间（1 Å / 5°）就有一致信号，
+不是只有把两条链拉开才有反应。
+
+🔴 **但出现一个相反方向的新问题：信号太强。**
+`ACE2_SARS2-RBD` 在 8 Å 下 **+45.0 sd**、`KRAS_RAF1` +26.9 sd。
+对比学习里这意味着 **negative 太容易区分** —— 模型无需学任何精细约束就能分开，因而学不到东西。
+⇒ **可用的 hard negative 在 0.5–1 Å / 2–5°**（+0.15 ~ +1.3 sd），**不是原文档设想的大幅扰动**。
+逐 assay 差异也大（GB1 仅 +2.8 sd vs ACE2 +45.0 sd），建模时幅度可能需要**逐 assay 标定**。
 
 ### 本地 smoke（A4500，**仅 sanity check，永不上报** —— ibex-usage Notes）
 2 个 assay、`--M 2 --reps 2`：sanity `max|gap| = 1.221e-04`（信号 gap 10+ nats）⇒ 扰动代码正确。

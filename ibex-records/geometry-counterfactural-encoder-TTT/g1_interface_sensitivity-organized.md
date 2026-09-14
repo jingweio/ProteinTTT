@@ -2,7 +2,15 @@
 
 **project** `geometry-counterfactural-encoder-TTT` ｜ **首个 task** `g1_interface_sensitivity`
 **开始** 2026-09-15 ｜ **最后更新** 2026-09-15
-**状态：G-1 gate 已提交（job 51897603，14 assay 全量）。建模尚未开始。**
+**状态：G-1 gate ✅ 通过（14 assay，29 秒）—— 信号存在且强；G-2（pull vs slide）在跑。建模尚未开始。**
+
+| gate | job | 结论 |
+|---|---|---|
+| **G-1** | 51897603 | ✅ sanity `max\|gap\|=3.7e-04`；1 Å 平移 **+1.30 sd (13/14)**、5° 旋转 **+1.00 sd (13/14)** ⇒ **前提风险推翻** |
+| **G-2** | 51897764 | ⏳ 分离「拉开」与「重新配对」 |
+
+🔴 **G-1 同时暴露一个相反的问题：信号太强**（8 Å 下 `ACE2` **+45 sd**）⇒ negative 太易区分、学不到东西。
+**可用的 hard negative 在 0.5–1 Å / 2–5°**，不是原文档设想的大幅扰动。
 
 > **与 `structure-encoder-TTT` 的关系**：**两个独立 project**，同一分支同一 worktree，
 > 按 ibex-usage §1c-4 用 `project_name` 区分。共用 `scripts/structure_encoder_ttt/` 下的

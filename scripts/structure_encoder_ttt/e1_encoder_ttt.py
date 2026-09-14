@@ -164,7 +164,8 @@ def run_ttt(model, ctx, y, ok, S_all, sf_per_m, sf_mean, args, log):
     head = nn.Linear(hV0.shape[-1], 1).to(dev)
     # (i) fit the head on the FROZEN h_V first: a randomly initialised head would pour
     # meaningless gradients into the encoder for the first steps.
-    opt_h = torch.optim.AdamW(head.parameters(), lr=args.head_lr)
+    opt_h = torch.optim.AdamW(head.parameters(), lr=args.head_lr,
+                              weight_decay=args.weight_decay)
     for _ in range(args.head_steps):
         loss = weighted_bce(head(hV0[0][okt]).squeeze(-1), yt, w_pos)
         opt_h.zero_grad(); loss.backward(); opt_h.step()
@@ -175,7 +176,10 @@ def run_ttt(model, ctx, y, ok, S_all, sf_per_m, sf_mean, args, log):
     model.eval()
     ps = trainable_encoder_params(model, args.train_features)
     log["n_trainable"] = int(sum(p.numel() for p in ps))
-    opt = torch.optim.AdamW(list(ps) + list(head.parameters()), lr=args.lr)
+    # 🔴 weight_decay must be passed explicitly: AdamW defaults to 0.01, and decay alone --
+    # with no probe loss and a near-zero anchor gradient -- moved rho by +0.0115 (job 51897820)
+    opt = torch.optim.AdamW(list(ps) + list(head.parameters()), lr=args.lr,
+                            weight_decay=args.weight_decay)
     rng = np.random.RandomState(args.seed)       # numpy, so the CUDA RNG is left untouched
     n = len(S_all)
     hist = []
@@ -268,6 +272,9 @@ def main():
     ap.add_argument("--lam", type=float, default=1.0)
     ap.add_argument("--anchor_batch", type=int, default=32,
                     help="variants per step used for the score anchor")
+    ap.add_argument("--weight_decay", type=float, default=0.0,
+                    help="AdamW's default is 0.01, NOT 0. Leaving it unset silently applied "
+                         "decay for every run up to 2026-09-15 and produced gains on its own")
     ap.add_argument("--probe_weight", type=float, default=1.0,
                     help="0 = anchor only. The permutation null still bought 88%% of the gain, "
                          "so this asks whether ANY probe signal is needed at all")
@@ -351,7 +358,8 @@ def main():
                    rho_base=rho_base, rho_ttt=rho_ttt, delta=rho_ttt - rho_base,
                    rho_ref=float(ref14.loc[dms, "rho_base"]) if dms in ref14.index else np.nan,
                    max_abs_score_change=same, lr=a.lr, steps=a.steps, lam=a.lam,
-                   permute=a.permute_labels, M=a.M, seed=a.seed)
+                   permute=a.permute_labels, M=a.M, seed=a.seed,
+                   weight_decay=a.weight_decay, probe_weight=a.probe_weight)
         if a.probe_qa:
             row.update(apn_before=q_before["ap_norm"], apn_after=q_after["ap_norm"],
                        apn_delta=q_after["ap_norm"] - q_before["ap_norm"],

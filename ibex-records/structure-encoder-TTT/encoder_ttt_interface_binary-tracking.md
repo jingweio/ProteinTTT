@@ -32,6 +32,8 @@
 | 2026-09-14 | 只训 `encoder_layers`+`W_e`（907,776 / 54.7%），**冻结 `features`** | agent | `features` 是坐标→RBF 的几何入口，改它等于改结构表示的基底；界面编码由消息传递层决定。留 `--train_features` 开关默认关 |
 | 2026-09-14 | **anchor 从只锚 `h_V` 改为同时锚 `h_V` 与 `h_E`** | 用户提问 → agent 查代码确认 | `L_probe` 只读 `h_V`，但 `EncLayer` 每层同时更新两者，且 `h_E` 有两条路径直达 decoder。只锚 node 则 `h_E` 可任意漂移而 loss 无感，而它的元素数是 `h_V` 的 **48 倍**（K=48）。**这是 review 抓出的第一个实质设计缺陷** |
 | 2026-09-14 | 新增 organized §7「深入优化模型设计」，**仅为分析、不改当前实验计划** | agent（用户要求） | 从 edge 视角审视注入点；含实测诊断：entity 跨多链的 assay 仅 3/25、14-assay 里仅 1 个 ⇒ 「chain≠entity」缺口**降级为次要**（我原以为它是主要缺口） |
+| 2026-09-14 | **执行平台 workstation → ibex**；记录目录 `workstation-records/` → `ibex-records/`；env 用已有的 `bgym-official` | 用户 | workstation 的 sshd 间歇不可用（§6.2）；ibex 上数据/ckpt 已就位且 md5 正确，`bgym-official` 的 numpy/scipy 与 workstation 那个 env 逐位相同 |
+| 2026-09-14 | organized §7（edge 视角的深入优化）**暂缓，不进入本轮实验** | 用户 | review 后决定先推进既定计划 |
 
 ---
 
@@ -112,15 +114,30 @@
 
 > ⚠️ **本 worktree（`structure-encoder-TTT`）的 `workstation-records/` 与 `local-records/` 已于 2026-09-14 整体删除**
 > （commit `b40eaf8`，用户要求）。上表所有文件的权威副本在 `bindingGYM-binding-sites-analysis` worktree；
-> 按 workstation-usage §4-3「数据就地化」，代码要**复制**进本 worktree，不要跨 worktree 引用。
+> 按 ibex-usage §1c-3「数据就地化」，代码要**复制**进本 worktree，不要跨 worktree 引用。
 
-### 5.2 数据（workstation）
+### 5.2 数据与 env（**ibex**，2026-09-14 实测确认）
 | 东西 | 路径 |
 |---|---|
-| BindingGYM input（DMS csv + 结构） | `/data/guoj0f/share/BindingGYM/input` |
-| ckpt `v_48_020.pt`（md5 `91d54c97a68bf551114f8c74c785e90f`） | `/data/guoj0f/share/BindingGYM/training/cache/v_48_020.pt` |
-| 官方 zero-shot 逐 variant 分数（seed1, M=5） | `/data/guoj0f/BindingGYM-zero-shot-proteinMPNN/scores/seed1_M5/` |
-| conda env（numpy 1.24.4 / scipy 1.10.1，**别升级**） | `bindinggym-zs-mpnn` |
+| BindingGYM input（`BindingGYM.csv` + 28 个 DMS csv + 22 个 structures） | `/ibex/user/guoj0f/share/BindingGYM/input` |
+| ckpt `v_48_020.pt`（md5 **实测** `91d54c97a68bf551114f8c74c785e90f` ✅ 正确那份） | `/ibex/user/guoj0f/share/BindingGYM/training/cache/v_48_020.pt` |
+| 官方打分脚本 | `/ibex/user/guoj0f/share/BindingGYM/baselines/protein_mpnn/compute_fitness_multi_pdb.py` |
+| conda base | `/ibex/user/guoj0f/anaconda3` |
+| **conda env** | **`bgym-official`** |
+| 本分支的 ibex 代码目录（§1c-2 按分支隔离） | `/ibex/user/guoj0f/ProteinTTT/structure-encoder-TTT/` |
+
+**env 选型（2026-09-14）**：用 ibex 已有的 **`bgym-official`**，不新建。
+实测 `py 3.8.20 / torch 1.13.1+cu117 / numpy 1.24.4 / scipy 1.10.1 / sklearn 1.3.2 / pandas 2.0.3`。
+- **numpy 1.24.4 + scipy 1.10.1 与 workstation 上 `bindinggym-zs-mpnn` 逐位相同** ⇒ 数值环境一致，不引入新变量。
+- sklearn 1.3.2 是 ibex-usage §1b-0 里**已验证等价**的两个版本之一（`1.2.1`/`1.3.2`）。
+- 按 §4 env 粒度例外①（同一大类且 env 未变），**不为本 project 另建 env**。
+- ⚠️ torch 1.13.1 是 **cu117（CUDA major 11）**。skill 禁止的是「新 runtime + 旧驱动」（cu13x 撞 12.x）；
+  这里是**旧 runtime + 新驱动**，方向相反、属兼容侧 —— 但仍**必须在 a100 上实测** `torch.cuda.is_available()`
+  ＋ 一次真实 kernel launch 才算数（见 §1 运行日志 T0）。
+
+⚠️ **ibex 上没有** workstation 那份 `/data/guoj0f/BindingGYM-zero-shot-proteinMPNN/scores/seed1_M5/`
+（官方 zero-shot 逐 variant 分数，329 MB）。**本任务不依赖它** —— baseline 臂必须用与 TTT 臂
+**同一个 `randn`** 现算，才能配对（§3.1 第 3 条），旧分数的解码顺序对不上，本来也不能直接用。
 
 ### 5.3 参照数值
 | 东西 | 路径 |
@@ -131,17 +148,24 @@
 
 ---
 
-## 6. 环境实况（2026-09-14 预检）
+## 6. 平台与环境实况
 
-- A100 80GB PCIe，**free 65.7 GB**，util **0%**；另有 3 个他人进程占 15.3 GB（不动）。
-- ⚠️ **`/home` 已 99%，只剩 96 GB**（workstation-usage skill 里记的 157 GB 已过期）。
-  本任务产出是 csv/md，留 worktree 内即可；大件一律走 `/data`。
-- `/data` 余 6.6 T。
+**2026-09-14：本任务的执行平台从 workstation 改为 ibex**（用户决定），记录目录随之
+`workstation-records/` → `ibex-records/`。
 
-### 6.1 🔴 SSH 间歇性不可用（2026-09-14 实测，未解决）
+### 6.1 ibex a100 实况（2026-09-14 实测）
 
-同一天内 ssh 出现三种表现：① 首次预检**成功**；② 随后 `Permission denied (publickey,password)`；
-③ 再后来直接超时。`ssh -v` 定位到真实原因：
+- **可调度节点上 a100 共 240 张，已分配 236 张，空闲 4 张**（98.3% 占用）；
+  另有 1 节点 `drained`、1 节点 `reserved` 不可用。
+- 队列：**81** 个 pending 作业申请 a100，176 个 running 占用。我自己无作业。
+- 空闲的 4 张是 `gpu108-09-r` / `gpu108-23-r` / `gpu109-16-r` / `gpu202-02-r` **每节点各 1 张**的碎片
+  ⇒ 对多卡作业无用，**对我们的单卡 + 短 walltime 作业恰好是最容易被 backfill 的形态**。
+- 存储：`/ibex/user` 配额 **1.5 T，已用 268 G，余 1.3 T**。
+
+### 6.2 为什么不用 workstation —— sshd 间歇性不可用（2026-09-14 实测）
+
+同一天内 ssh 到 `10.67.24.41` 出现三种表现：① 首次预检**成功**；
+② 随后 `Permission denied (publickey,password)`；③ 再后来直接超时。`ssh -v` 定位到真实原因：
 
 ```
 debug1: identity file /home/guoj0f/.ssh/id_ed25519 type 3   <- key 正常读到
@@ -151,11 +175,8 @@ Connection timed out during banner exchange                 <- sshd 未在超时
 
 `/dev/tcp/10.67.24.41/22` 可达 ⇒ **不是网络不通、不是 key 问题、不是本地沙箱**，
 而是**远端 sshd 响应不过来**（56 核共享机，GPU util 0% 但 CPU/IO 可能被他人占满）。
-⚠️ **影响**：这会让 `nohup` 启动、监控轮询、结果回流都间歇性失败。
-开跑前必须重测；长任务务必用 `nohup`/`tmux` 脱离 ssh 会话，**不要让任务依赖连接存活**。
-
-- 远端 env 列表：`bgym-official` `bindinggym-zs-mpnn` `complex-mutant-structure-pred`
-  `esmfold2` `h3ddg-reproduce` `pgym-binding-partner-mpnn` `proteingym-ttt`。
+它会让 `nohup` 启动、监控轮询、结果回流都间歇性失败 —— 这是改用 ibex 的直接原因之一。
+（该机当时的另一项实况：`/home` 已 99%、只剩 96 GB。）
 
 ---
 
@@ -173,5 +194,5 @@ Connection timed out during banner exchange                 <- sshd 未在超时
 ```bash
 # 尚未有可运行脚本。计划中的入口：
 #   scripts/structure_encoder_ttt/e1_encoder_ttt.py   （TTT + 重打分，单 assay）
-#   workstation-records/structure-encoder-TTT/sh/{task}_{dt}.sh  （批量 launcher）
+#   ibex-records/structure-encoder-TTT/sh/{task}_{dt}.sh        （sbatch 脚本）
 ```

@@ -257,17 +257,47 @@ stability_finetuned.pt vs proteinmpnn_v_48_020.pt
 
 #### 对照设计：必须是 stage1 → stage2，不是 anchor → stage2
 
-查证发现 **StaB-ddG 的 base 并不是我们的 anchor 权重**：
-其 `proteinmpnn.pt`（stage1）与 `v_48_020` 的 md5 不同（`698982b1…` vs `91d54c97…`），
-逐元素也有差。所以直接拿 anchor 和 stage2 比，会把「换了个 base checkpoint」
-和「Megascale finetune」两个效应混在一起。
+**两个 repo 用的 pretrained ProteinMPNN 不是同一份 —— 而且区别有名字。**
+
+| repo | 文件 | md5 | 实际是 |
+|---|---|---|---|
+| BindingGYM | `training/cache/v_48_020.pt` | `91d54c97…` | 官方 **vanilla** `proteinmpnn_v_48_020.pt` |
+| StaB-ddG | `model_ckpts/proteinmpnn.pt` | `698982b1…` | 官方 **soluble** `solublempnn_v_48_020.pt` |
+
+**同名 `v_48_020.pt`、同架构、同 `k=48`、同 `noise=0.20`，差别在训练集**：
+vanilla 在整个 PDB 上训练，soluble **只用可溶蛋白条目**（排除膜蛋白）。
+StaB-ddG 的 README 第 50 行写明了这点；已用 md5 逐位验证
+（其 `proteinmpnn.pt` 与官方 `solublempnn_v_48_020.pt` **完全相同**）。
+
+**差异量级（1,660,485 个参数元素）：**
+
+| 对比 | 不同的元素 | 相对 L2（中位数） | 性质 |
+|---|---|---|---|
+| vanilla ↔ soluble | **100%** | **1.324** | 差异**比权重本身还大** ⇒ 两次独立训练 |
+| soluble → stage2 | 94.7% | **0.014** | 轻微扰动 ⇒ 确实是 finetune |
+
+⇒ **base 之间的差异比 Megascale finetune 本身大约 100 倍。**
+这正是"必须用 stage1 而非 anchor 做对照"的定量理由：否则被控制掉的那个效应
+比想测的变量还大两个数量级。
+
+**实测（口径 A）：** soluble 0.3760 vs vanilla 0.3899，
+`Δ = −0.0139，7/25 正号，Wilcoxon p = 0.0516` —— 方向一致、接近显著。
+
+> 📌 值得注意的对比：**vanilla→soluble 是巨大的权重改变但效应一致**（7/25，p=0.05）；
+> **Megascale finetune 是微小的权重改变但效应不一致**（16/25 正号，p=0.87，见下）。
+> 权重变化的**幅度**与其对下游任务的**系统性影响**并不成正比。
+
+> ⚠️ **一个诱人但站不住的解释**：soluble 排除了膜蛋白训练数据，而 BindingGYM 里
+> `CXCR4_CXCL12_8U4O` 的 CXCR4 是 GPCR（7TM 膜蛋白）。它确实排倒数第 3（Δ=−0.0906）——
+> **但这不构成证据**：`5A12_VEGF`(−0.0946) 与 `Z-domain_ZSPA-1_LL2`(−0.0922) 一样差，
+> 二者都不是膜蛋白；且 25 个里排进最差 3 名的偶然概率约 12%，**n=1 说明不了机制**。
 
 **三点对照**（全部同 readout、同口径、同 25 assay）：
 
 | run | ckpt | 角色 |
 |---|---|---|
-| `proteinmpnn_*` | `v_48_020`（md5 `91d54c97…`） | benchmark 参照 |
-| `stabddg_s1_*` | StaB-ddG 的 `proteinmpnn.pt`（`698982b1…`） | 控制「base 不同」 |
+| `proteinmpnn_*` | vanilla `v_48_020`（`91d54c97…`） | benchmark 参照 |
+| `stabddg_s1_*` | **soluble** `v_48_020`（`698982b1…`） | 控制「vanilla vs soluble」 |
 | `stabddg_s2_*` | `stability_finetuned.pt`（`ed2645a2…`） | 变量：Megascale finetune |
 
 ⇒ **Δ(stage2 − stage1) = Megascale finetune 的纯效应。**

@@ -31,6 +31,7 @@
 | 2026-09-14 | single-chain 表的含义**不再追究** | 用户 | 所有实验都在 complex-level 做，用不到它 |
 | 2026-09-14 | 只训 `encoder_layers`+`W_e`（907,776 / 54.7%），**冻结 `features`** | agent | `features` 是坐标→RBF 的几何入口，改它等于改结构表示的基底；界面编码由消息传递层决定。留 `--train_features` 开关默认关 |
 | 2026-09-14 | **anchor 从只锚 `h_V` 改为同时锚 `h_V` 与 `h_E`** | 用户提问 → agent 查代码确认 | `L_probe` 只读 `h_V`，但 `EncLayer` 每层同时更新两者，且 `h_E` 有两条路径直达 decoder。只锚 node 则 `h_E` 可任意漂移而 loss 无感，而它的元素数是 `h_V` 的 **48 倍**（K=48）。**这是 review 抓出的第一个实质设计缺陷** |
+| 2026-09-14 | 新增 organized §7「深入优化模型设计」，**仅为分析、不改当前实验计划** | agent（用户要求） | 从 edge 视角审视注入点；含实测诊断：entity 跨多链的 assay 仅 3/25、14-assay 里仅 1 个 ⇒ 「chain≠entity」缺口**降级为次要**（我原以为它是主要缺口） |
 
 ---
 
@@ -68,6 +69,18 @@
 - `pandas` 里别用 `median` 之类会被方法名遮蔽的列名。
 - 回流用 `rsync --exclude '*.md' --update`（`-a` 按差异传不按新旧传，会把本地写的 record 覆盖回旧版；
   2026-09-13 实测事故：574 行被覆盖成 345 行）。
+
+### 3.3 ProteinMPNN 图结构与边特征（备查，2026-09-14 读码确认）
+
+- `K = num_edges = 48`（硬编码于 ckpt dict），实取 `min(48, L)`；**按 Cα–Cα 距离选近邻**。
+  `D_adjust = D + (1−mask_2D)·D_max` 把无效残基推最远，但**有效残基不足 48 时它们仍会进邻居表**。
+- `edge_in = 16 + 16×25 = 416`：**25 组 RBF** = `{N,Cα,C,O,Cβ}` 两两组合，范围 **2–22 Å**，σ≈1.25 Å；
+  **Cβ 是从骨架推算的虚拟原子**（`Cb = −0.58273431a + 0.56802827b − 0.54067466c + Cα`）⇒ **模型看不到真实侧链**。
+- `PositionalEncodings`: `d = clip(offset+32,0,64)·mask + (1−mask)·65`，`mask=1[同链]`
+  ⇒ **所有跨链边共享同一个 token**，彼此只能靠 RBF 区分。
+- decoder: `h_ESV = mask_bw·cat[h_E, h_S, h_V_t] + mask_fw·cat[h_E, 0, h_V^enc]`；
+  `mask_attend` 由 `decoding_order` 的下三角置换得到。
+  ⇒ **`h_E` 两支都进、且不随 decoder 层数改变；encoder 的 `h_V` 只经 `fw` 支 ＋ 初始状态。**
 
 ---
 

@@ -155,6 +155,30 @@ def run_ttt(model, ctx, y, ok, args, log):
     return head
 
 
+# ----------------------------------------------------------------------------- probe
+def probe_apnorm(h, y, ok, seed=0):
+    """AP_norm from an INDEPENDENT 5-fold logistic probe on h_V -- the sanity check that the
+    training did what it claims. It must not reuse the head trained alongside the encoder:
+    that head co-adapted with h_V and would report its own fit, not the representation's.
+
+    AP_norm = (AP - pi)/(1 - pi): AP's random baseline is the prevalence pi, which varies
+    3.8%-33.9% across assays, so raw AP is not comparable between them.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import average_precision_score, roc_auc_score
+    X, yy = h[ok], y[ok]
+    if yy.min() == yy.max():
+        return dict(ap_norm=float("nan"), auc=float("nan"), pi=float(yy.mean()))
+    Xs = (X - X.mean(0)) / (X.std(0) + 1e-8)
+    pa = np.zeros(len(yy))
+    for tr, te in StratifiedKFold(5, shuffle=True, random_state=seed).split(Xs, yy):
+        pa[te] = LogisticRegression(max_iter=2000).fit(Xs[tr], yy[tr]).predict_proba(Xs[te])[:, 1]
+    pi = float(yy.mean())
+    ap = average_precision_score(yy, pa)
+    return dict(ap_norm=float((ap - pi) / (1 - pi)), auc=float(roc_auc_score(yy, pa)), pi=pi)
+
+
 # ----------------------------------------------------------------------------- scoring
 @torch.no_grad()
 def score_all(ctx, S, batch):
@@ -185,6 +209,8 @@ def main():
                     help="substring the GPU name must contain; local smoke runs pass A4500. "
                          "ibex-usage: local-GPU output is a sanity check only, never reported")
     ap.add_argument("--limit", type=int, default=0, help="smoke only: cap variants per assay")
+    ap.add_argument("--probe_qa", action="store_true",
+                    help="measure AP_norm with an independent probe before and after TTT")
     a = ap.parse_args()
 
     dev = torch.device("cuda:0")
@@ -228,10 +254,17 @@ def main():
             v = y[ok].copy(); rs.shuffle(v); y = y.copy(); y[ok] = v
 
         log = {}
+        if a.probe_qa:
+            with torch.no_grad():
+                hV_before, _ = encoder_forward(model, ctx)
+            q_before = probe_apnorm(hV_before[0].float().cpu().numpy(), y, ok)
         run_ttt(model, ctx, y, ok, a, log)
         # REBUILD the whole cache from the trained weights: h_E changed too, and set_h_V()
         # would silently keep the stale one.
         ctx2 = AssayContext(model, pdb, df["chain_id"].values[0], a.M, dev, randn=randn)
+        if a.probe_qa:
+            q_after = probe_apnorm(ctx2.h_V[0].float().cpu().numpy(), y, ok)
+            log["q_before"], log["q_after"] = q_before, q_after
         ttt = score_all(ctx2, S, a.batch)
         rho_ttt = stats.spearmanr(ttt[keep], df["DMS_score"].to_numpy()[keep]).correlation
 
@@ -242,10 +275,18 @@ def main():
                    rho_ref=float(ref14.loc[dms, "rho_base"]) if dms in ref14.index else np.nan,
                    max_abs_score_change=same, lr=a.lr, steps=a.steps, lam=a.lam,
                    permute=a.permute_labels, M=a.M, seed=a.seed)
+        if a.probe_qa:
+            row.update(apn_before=q_before["ap_norm"], apn_after=q_after["ap_norm"],
+                       apn_delta=q_after["ap_norm"] - q_before["ap_norm"],
+                       auc_before=q_before["auc"], auc_after=q_after["auc"])
         rows.append(row)
         print(f"{dms:44s} rho {rho_base:.4f} -> {rho_ttt:.4f}  ({rho_ttt-rho_base:+.4f})   "
               f"ref {row['rho_ref']:.4f}  pi={log['pi']:.3f} w+={log['w_pos']:.1f} "
               f"|dscore|max={same:.3e}  [{time.time()-t0:.0f}s]", flush=True)
+        if a.probe_qa:
+            print(f"{'':44s}   AP_norm {q_before['ap_norm']:.4f} -> {q_after['ap_norm']:.4f} "
+                  f"({q_after['ap_norm']-q_before['ap_norm']:+.4f})   "
+                  f"AUC {q_before['auc']:.4f} -> {q_after['auc']:.4f}", flush=True)
         pd.DataFrame(rows).to_csv(f"{out_dir}/{a.tag}_per_assay.csv", index=False)
         json.dump(log["hist"], open(f"{out_dir}/{a.tag}_{dms}_loss.json", "w"), indent=1)
 
@@ -254,6 +295,9 @@ def main():
           f"permute={a.permute_labels} ===")
     print(f"mean rho_base {t.rho_base.mean():.4f}   mean rho_ttt {t.rho_ttt.mean():.4f}   "
           f"mean delta {t.delta.mean():+.4f}   wins {int((t.delta>0).sum())}/{len(t)}")
+    if "apn_delta" in t.columns:
+        print(f"mean AP_norm {t.apn_before.mean():.4f} -> {t.apn_after.mean():.4f}   "
+              f"mean delta {t.apn_delta.mean():+.4f}   up in {int((t.apn_delta>0).sum())}/{len(t)}")
     if t.rho_ref.notna().all():
         print(f"baseline vs recorded rho_base: max|d| = {np.abs(t.rho_base-t.rho_ref).max():.4f}")
     if a.steps == 0:

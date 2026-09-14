@@ -30,6 +30,7 @@
 | 2026-09-14 | **撤回**原计划的 T2（编辑 `h_V` 估上界） | agent | 形状上是 `s0_intervention` 的近亲，而后者被用户判定不可信、原因未记录。新方案让真实训练去动 `h_V`，绕开这个未知 |
 | 2026-09-14 | single-chain 表的含义**不再追究** | 用户 | 所有实验都在 complex-level 做，用不到它 |
 | 2026-09-14 | 只训 `encoder_layers`+`W_e`（907,776 / 54.7%），**冻结 `features`** | agent | `features` 是坐标→RBF 的几何入口，改它等于改结构表示的基底；界面编码由消息传递层决定。留 `--train_features` 开关默认关 |
+| 2026-09-14 | **anchor 从只锚 `h_V` 改为同时锚 `h_V` 与 `h_E`** | 用户提问 → agent 查代码确认 | `L_probe` 只读 `h_V`，但 `EncLayer` 每层同时更新两者，且 `h_E` 有两条路径直达 decoder。只锚 node 则 `h_E` 可任意漂移而 loss 无感，而它的元素数是 `h_V` 的 **48 倍**（K=48）。**这是 review 抓出的第一个实质设计缺陷** |
 
 ---
 
@@ -47,6 +48,14 @@
    构造 `h_EXV_encoder` 与 `h_EXV_fw`。`set_h_V()` 只重建依赖 `h_V` 的那部分，**保留旧 `h_E`** ——
    它是为「编辑表征」的干预写的，对「重训 encoder」是错的。
    做法：用训好的权重、**同一个 `randn`**，重新构造 `AssayContext`。
+   **代码依据**：`EncLayer.forward` 结尾 `h_E = self.norm3(h_E + self.dropout3(h_message))` 然后 `return h_V, h_E`；
+   `ProteinMPNN.forward` 里 `h_ES = cat_neighbors_nodes(h_S, h_E, E_idx)`（→ `bw` 项）与
+   `h_EX_encoder = cat_neighbors_nodes(zeros_like(h_S), h_E, E_idx)`（→ `fw` 项）—— **`h_E` 两条路径都进 decoder**。
+2b. 🔴 **`L_anchor` 必须同时包含 `h_E` 项**（与上一条同源，2026-09-14 修正）：
+   `‖h_V−h_V^frozen‖²_F/(L'·128)  +  ‖h_E−h_E^frozen‖²_F/(L'·K·128)`，K=48，两项各自按元素数归一。
+   `h_E` 不在 probe 视野内却直达 decoder ⇒ 不锚它等于放任 48 倍于 `h_V` 的量自由漂移。
+   实现注意：`h_E^frozen` 要在 TTT 开始前存一份 —— 最大 `1107×48×128×4B ≈ 27 MB`（fp32），可忽略。
+   > 一件事的两个面：**评测侧**忘了重建 `h_E` ⇒ 读到旧表征；**训练侧**忘了锚 `h_E` ⇒ 它无人看管地漂移。
 3. **两臂共用解码顺序**：`AssayContext.__init__(..., randn=)` 显式传入。
    顺带绕开「`model.train()` 触发 dropout → 推走 CUDA philox 流 → 两臂 randn 不同」这个坑。
 4. **评测时 `model.eval()` + `augment_eps=0`**。TTT 用 `torch.enable_grad()` 包住后

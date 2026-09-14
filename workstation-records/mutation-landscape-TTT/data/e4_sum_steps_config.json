@@ -1,0 +1,34 @@
+{
+ "assays": [
+  "GB1_IgG-Fc_fitness_1FCC",
+  "KRAS_RAF1-RBD_norfitness_6VJJ",
+  "PSD95_CRIPT_1BE9"
+ ],
+ "lams": [
+  0.001,
+  0.003,
+  0.01,
+  0.03,
+  0.1,
+  0.3,
+  1.0,
+  3.0
+ ],
+ "lr": 0.0001,
+ "steps": 3000,
+ "bs": 128,
+ "tau": 5.0,
+ "agg": "sum",
+ "mode": "decoder",
+ "M": 5,
+ "sweep_eval_M": 1,
+ "eval_at": [
+  300,
+  1000,
+  2000,
+  3000
+ ],
+ "seed": 1,
+ "permute_d": false,
+ "tag": "e4_sum_steps"
+}

@@ -121,9 +121,15 @@ class AssayContext:
         return S[0]
 
     def score(self, S_batch, m_idx=None):
-        """S_batch: (B, L) long. Returns (B,) global_score, differentiable in decoder params."""
+        """S_batch: (B, L) long. Returns (B,) global_score, differentiable in decoder params.
+
+        m_idx: None -> average all M orders (the official read-out); an int -> that one
+        order; an iterable -> average that subset. The subset form lets the lambda sweep
+        be evaluated cheaply WITHOUT changing how many orders training draws from.
+        """
         B = S_batch.shape[0]
-        ms = range(self.M) if m_idx is None else [m_idx]
+        ms = (range(self.M) if m_idx is None else
+              [m_idx] if isinstance(m_idx, int) else list(m_idx))
         E_idx = self.E_idx.expand(B, -1, -1)
         h_E = self.h_E.expand(B, -1, -1, -1)
         mask = self.mask[:1].expand(B, -1)

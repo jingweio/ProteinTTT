@@ -12,6 +12,13 @@ The M = 5 decoding orders are the official seed-1 ones, fixed for the whole run.
 samples one of them per step (the plan's M = 1) and anchors against the frozen score AT THAT
 SAME ORDER, so the anchor cannot spend its budget penalising decoding-order noise.
 Evaluation averages all 5, which is the baseline's protocol.
+
+--sweep_eval_M makes the lambda SEARCH cheap without changing anything else: every lambda is
+trained identically (always sampling from all M orders) and only the rho used to RANK the
+lambdas is read off fewer orders; the winner is then retrained with the same seed and scored
+at the full M, which is the number reported. This is deliberately not the old --sweep_M, which
+built the context at a smaller M and so quietly changed the training regime as well -- lambda*
+was then chosen under 1-order training but used for 5-order training.
 """
 import argparse, json, os, random, sys, time
 import numpy as np, pandas as pd, torch
@@ -52,7 +59,7 @@ def spearman(a, b):
     return stats.spearmanr(a, b).statistic
 
 
-def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=None):
+def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=None, eval_M=None):
     """One TTT run. Returns per-variant scores at M=5 after training."""
     sd0 = ctx.model.state_dict()
     state = {k: v.detach().clone() for k, v in sd0.items()}
@@ -84,10 +91,11 @@ def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=Non
             log.append(dict(lam=lam, step=step, l_div=float(l_div), l_anchor=float(l_anc)))
     ctx.model.eval()
 
+    ms = range(ctx.M if eval_M is None else min(eval_M, ctx.M))
     with torch.no_grad():
         out = torch.empty(len(S))
         for i in range(0, len(S), 64):
-            out[i:i + 64] = ctx.score(S[i:i + 64]).float().cpu()
+            out[i:i + 64] = ctx.score(S[i:i + 64], m_idx=ms).float().cpu()
     ctx.model.load_state_dict(state)          # restore: every lambda starts from pretrained
     return out.numpy()
 
@@ -104,7 +112,7 @@ def main():
     ap.add_argument("--agg", default="max")
     ap.add_argument("--mode", default="decoder")
     ap.add_argument("--M", type=int, default=5, help="decoding orders for the FINAL evaluation")
-    ap.add_argument("--sweep_M", type=int, default=None,
+    ap.add_argument("--sweep_eval_M", type=int, default=1,
                     help="cheaper M for the sweep itself; the best lambda is re-evaluated at --M. "
                          "The sweep only needs the SHAPE of the curve; only the number that gets "
                          "compared to the 0.4850 bar needs the baseline's M=5.")
@@ -129,7 +137,7 @@ def main():
 
     for dms in a.assays:
         t0 = time.time()
-        ctx, S, df = build(dms, model, a.sweep_M or a.M, a.seed, dev)
+        ctx, S, df = build(dms, model, a.M, a.seed, dev)
         bs_eff = max(8, min(a.bs, int(3.0e8 / (ctx.L * 48 * 256))))
         sf = frozen_scores(ctx, S, bs_eff)
 
@@ -160,7 +168,7 @@ def main():
         log = []
         for lam in a.lams:
             sc = run_one(ctx, S_v, w_var, y, sf_v, lam, a.lr, a.steps, bs_eff,
-                         a.mode, dev, a.seed, log)
+                         a.mode, dev, a.seed, log, eval_M=a.sweep_eval_M)
             rho = spearman(sc, y)
             corr_w = float(np.corrcoef(w_var, sc)[0, 1])
             rows.append(dict(DMS_id=dms, lam=lam, rho=rho, rho_base=base5,
@@ -173,15 +181,12 @@ def main():
                   flush=True)
             flush()          # one assay dying must not cost the assays already finished
         curves += log
-        if a.sweep_M:        # re-score the winner at the evaluation M
+        if a.sweep_eval_M < a.M:   # re-score the winner at the full evaluation M
             best_lam = max((r for r in rows if r["DMS_id"] == dms), key=lambda r: r["rho"])["lam"]
-            # M is fixed at construction -- the featurised tensors, the randn and every mask
-            # built from it carry that M -- so the context has to be REBUILT, not relabelled.
-            ctx, S, _ = build(dms, model, a.M, a.seed, dev)
-            S_v = S[keep]
-            sf_v = frozen_scores(ctx, S_v, bs_eff)
+            # the context is already at --M, so the winner is retrained under the SAME regime
+            # it was ranked under; same seed => same trajectory, only the read-out widens.
             sc = run_one(ctx, S_v, w_var, y, sf_v, best_lam,
-                         a.lr, a.steps, bs_eff, a.mode, dev, a.seed)
+                         a.lr, a.steps, bs_eff, a.mode, dev, a.seed, eval_M=a.M)
             preds[f"{dms}|{best_lam}|M{a.M}"] = sc
             rows.append(dict(DMS_id=dms, lam=best_lam, rho=spearman(sc, y), rho_base=base5,
                              gain=spearman(sc, y) - base5, corr_w_after=float(np.corrcoef(w_var, sc)[0, 1]),
@@ -191,7 +196,7 @@ def main():
             print(f"{dms:38s} lam*={best_lam:<6g} FINAL M={a.M} rho={rows[-1]['rho']:.4f} "
                   f"({rows[-1]['gain']:+.4f})", flush=True)
         flush()
-        print(f"  [{dms}] L={ctx.L} n={len(keep)} bs={bs_eff} sweepM={a.sweep_M or a.M} "
+        print(f"  [{dms}] L={ctx.L} n={len(keep)} bs={bs_eff} sweepEvalM={a.sweep_eval_M} "
               f"base(M=5) {base5:.4f}  {time.time()-t0:.0f}s", flush=True)
 
     flush(); t = pd.DataFrame(rows)

@@ -14,7 +14,7 @@ import argparse, os, sys, time
 import numpy as np, torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bgmpnn import load_model, set_trainable
-from e1_lambda_sweep import build
+from e1_lambda_sweep import build, BG
 
 GB = 1024 ** 3
 
@@ -50,7 +50,7 @@ def main():
     a = ap.parse_args()
     dev = torch.device("cuda")
     assert "A100" in torch.cuda.get_device_name(0), torch.cuda.get_device_name(0)
-    model = load_model(dev)
+    model = load_model(f"{BG}/training/cache/v_48_020.pt", dev)
     tot = torch.cuda.get_device_properties(0).total_memory / GB
     print(f"card {torch.cuda.get_device_name(0)}  total {tot:.1f} GiB  "
           f"free-at-start {(tot - torch.cuda.memory_reserved() / GB):.1f} GiB\n")

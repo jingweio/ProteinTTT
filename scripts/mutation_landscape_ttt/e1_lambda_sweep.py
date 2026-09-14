@@ -163,6 +163,9 @@ def main():
     suf = "_null" if a.permute_d else ""
     csv_path = f"{OUT}/{a.tag}_lambda_sweep{suf}.csv"
 
+    # written BEFORE the first assay too: a run that dies leaves a record of what it was
+    json.dump(vars(a), open(f"{OUT}/{a.tag}_config{suf}.json", "w"), indent=1)
+
     def flush():
         pd.DataFrame(rows).to_csv(csv_path, index=False)
         pd.DataFrame(curves).to_csv(f"{OUT}/{a.tag}_loss_curves{suf}.csv", index=False)

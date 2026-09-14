@@ -33,6 +33,9 @@ WT complex X ──[encoder E_θ]──→ h_V (L×128) ──┬─→ [probe h
                                                               per-assay Spearman → 14-assay 未加权平均 = ρ
 ```
 
+> **规模**：encoder 侧可训练参数 **907,776 / 1,660,485 = 54.7%**，比 decoder 侧（41.9%）还多 ——
+> **容量不是这条线的瓶颈**。
+
 ### 2.1 变量与可见性
 
 | 符号 | 定义 | **训练时可见吗** |
@@ -162,6 +165,7 @@ P1/P2 给出单一共享超参 → M1 才不是逐 assay 调参；M1 拿到增�
 
 | 项 | 取值 | 理由 |
 |---|---|---|
+| **可训练参数** | **`encoder_layers` + `W_e`** = 907,776（**54.7%**），`features` 冻结 | 实测 total 1,660,485：`features` 54,576 / `W_e` 16,512 / `encoder_layers` 891,264 / decoder 侧 695,445（41.9%，与 decoder-TTT 记录逐位吻合 ⇒ 交叉验证通过）。**`features` 是坐标→RBF 的几何入口**，改它等于改结构信息的表示基底，风险高而收益不明；界面编码质量主要由做消息传递的 `encoder_layers` 决定。`--train_features` 作为 pilot 开关，默认关 |
 | optimizer | **AdamW**，`weight_decay=0` | 短训；正则化由 `L_anchor` 显式承担，不要两套正则互相干扰 |
 | lr | pilot 扫 **{3e-5, 1e-4, 3e-4}** | decoder-TTT 那侧只验证过 1e-4（3e-5/3e-4 未扫）。encoder 更靠近输入、扰动向下游传播更远，**先验上应更保守**，所以把 3e-5 纳进来 |
 | steps | pilot 扫 **{50, 150, 400}** | 训练极便宜（单个 complex 的 encoder forward+backward），但**过训会塌缩**，所以扫的是「什么时候开始坏」而不是「多久收敛」 |

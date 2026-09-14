@@ -29,6 +29,7 @@
 | 2026-09-14 | **撤回**原计划的 T1（partner 坐标加噪阶梯） | agent，用户质疑后 | 它干预的是「partner 几何信息量」而非 `q`，没有隔离出自变量；且 single-chain 端点与 partner-blind 结论已存在，属重复已知结论 |
 | 2026-09-14 | **撤回**原计划的 T2（编辑 `h_V` 估上界） | agent | 形状上是 `s0_intervention` 的近亲，而后者被用户判定不可信、原因未记录。新方案让真实训练去动 `h_V`，绕开这个未知 |
 | 2026-09-14 | single-chain 表的含义**不再追究** | 用户 | 所有实验都在 complex-level 做，用不到它 |
+| 2026-09-14 | 只训 `encoder_layers`+`W_e`（907,776 / 54.7%），**冻结 `features`** | agent | `features` 是坐标→RBF 的几何入口，改它等于改结构表示的基底；界面编码由消息传递层决定。留 `--train_features` 开关默认关 |
 
 ---
 
@@ -114,6 +115,23 @@
 - ⚠️ **`/home` 已 99%，只剩 96 GB**（workstation-usage skill 里记的 157 GB 已过期）。
   本任务产出是 csv/md，留 worktree 内即可；大件一律走 `/data`。
 - `/data` 余 6.6 T。
+
+### 6.1 🔴 SSH 间歇性不可用（2026-09-14 实测，未解决）
+
+同一天内 ssh 出现三种表现：① 首次预检**成功**；② 随后 `Permission denied (publickey,password)`；
+③ 再后来直接超时。`ssh -v` 定位到真实原因：
+
+```
+debug1: identity file /home/guoj0f/.ssh/id_ed25519 type 3   <- key 正常读到
+debug1: Connection established.                             <- TCP 已建立
+Connection timed out during banner exchange                 <- sshd 未在超时内回 banner
+```
+
+`/dev/tcp/10.67.24.41/22` 可达 ⇒ **不是网络不通、不是 key 问题、不是本地沙箱**，
+而是**远端 sshd 响应不过来**（56 核共享机，GPU util 0% 但 CPU/IO 可能被他人占满）。
+⚠️ **影响**：这会让 `nohup` 启动、监控轮询、结果回流都间歇性失败。
+开跑前必须重测；长任务务必用 `nohup`/`tmux` 脱离 ssh 会话，**不要让任务依赖连接存活**。
+
 - 远端 env 列表：`bgym-official` `bindinggym-zs-mpnn` `complex-mutant-structure-pred`
   `esmfold2` `h3ddg-reproduce` `pgym-binding-partner-mpnn` `proteingym-ttt`。
 

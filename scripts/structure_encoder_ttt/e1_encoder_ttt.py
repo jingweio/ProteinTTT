@@ -1,25 +1,30 @@
-"""E-1: encoder-side TTT on a class-weighted interface objective, then rescore.
+"""E-1: encoder-side TTT, anchored on the SCORE rather than on the representation.
 
-The encoder is adapted at test time using ONLY the structure: the per-residue label is
+The encoder is adapted at test time using only the structure: the per-residue label is
 1[d_heavy(r, other entity) <= 5 A], derived from the PDB and the metadata entity partition,
-so it is label-free with respect to DMS. The decoder is frozen throughout, so any change in
-the reported Spearman is attributable to the encoder's representation.
+so it is label-free with respect to DMS. The decoder is frozen, so any change in the
+reported Spearman is attributable to the encoder.
 
-    L = L_probe + lambda * L_anchor
-    L_probe  = -(1/L') sum_r [ w_pos*y_r*log p_r + (1-y_r)*log(1-p_r) ],  w_pos = (1-pi)/pi
-    L_anchor = ||h_V - h_V^frozen||_F^2 / (L'*128) + ||h_E - h_E^frozen||_F^2 / (L'*K*128)
+    L(theta,psi) = L_probe + lambda * ||s_theta - s_frozen||^2 / var(s_frozen)
+    L_probe = -(1/L') sum_r [ w_pos*y_r*log p_r + (1-y_r)*log(1-p_r) ],  w_pos = (1-pi)/pi
 
-Both encoder outputs are anchored. h_E is NOT visible to the probe yet reaches the decoder
-along two paths (h_ES into the backward term, h_EX_encoder into the forward term) and holds
-K=48 times the elements h_V does, so anchoring h_V alone would let it drift unwatched.
+The anchor is on the model's OUTPUT, following the form already validated on the decoder
+side. Anchoring h_V (and h_E) instead was the previous design and is retired: a Frobenius
+penalty constrains how far the representation moves, not whether that movement reaches the
+decoder, and it is the score we actually care about. var(s_frozen) is taken over the whole
+assay, so lambda is comparable across assays whose score scale differs by ~3.3x.
+
+Consequence for the compute: the anchor requires s_theta, so each training step now runs the
+DECODER over a batch of variants and backpropagates through it into the encoder. The old
+design only ever ran the encoder.
 
 Three things that fail silently if got wrong, all handled here:
   * gap-padded slots. parse_PDB pads crystallographic gaps with an 'X' whose coordinates
     become (0,0,0); they occupy rows in h_V but are not residues. Everything is masked to
     `ok` = (real residue) AND (tied_featurize's own mask).
   * a stale encoder cache. AssayContext caches h_V AND h_E and builds h_EXV_encoder/h_EXV_fw
-    from both; set_h_V() rebuilds only the h_V-derived half. Retraining changes both, so the
-    context is REBUILT from the trained weights, reusing the same randn.
+    from both. Retraining changes both, so the context is REBUILT from the trained weights,
+    reusing the same randn, rather than patched through set_h_V.
   * decoding-order noise. The two arms must share randn, else the paired difference is
     swamped (per-assay seed sigma median 0.0184 vs paired gain sd 0.0037). Training keeps
     model.eval() so dropout neither randomises the objective nor advances the CUDA RNG.
@@ -32,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bgmpnn import load_model, AssayContext                      # noqa: E402
 from bgpdb import pdb_chain_slots                                # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
-from protein_mpnn_utils import gather_nodes                      # noqa: E402
+from protein_mpnn_utils import gather_nodes, cat_neighbors_nodes  # noqa: E402
 
 BG = os.environ.get("BG_ROOT", "/ibex/user/guoj0f/share/BindingGYM")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +80,33 @@ def trainable_encoder_params(model, train_features):
     return ps
 
 
+def score_with(ctx, model, h_V, h_E, S_batch, m):
+    """ctx.score() but reading CALLER-SUPPLIED h_V/h_E, so gradients reach the encoder.
+
+    h_EXV_encoder and h_EXV_fw derive from BOTH h_V and h_E, so both are rebuilt here; using
+    the cached ones would silently score the pretrained representation. Everything else --
+    the summed NLL, no WT term, no length normalisation -- matches the official read-out.
+    """
+    B = S_batch.shape[0]
+    E_idx = ctx.E_idx.expand(B, -1, -1)
+    hE_b = h_E.expand(B, -1, -1, -1)
+    mask = ctx.mask[:1].expand(B, -1)
+    h_EX = cat_neighbors_nodes(torch.zeros_like(model.W_s(ctx.S_wt[:1])), h_E, ctx.E_idx)
+    h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX, ctx.E_idx)
+    fw = (ctx.mask_fw[m:m + 1] * h_EXV_encoder)
+    bw = ctx.mask_bw[m:m + 1]
+    h_S = model.W_s(S_batch)
+    h_ES = cat_neighbors_nodes(h_S, hE_b, E_idx)
+    hv = h_V.expand(B, -1, -1)
+    for layer in model.decoder_layers:
+        h_ESV = bw * cat_neighbors_nodes(hv, h_ES, E_idx) + fw
+        hv = layer(hv, h_ESV, mask)
+    lp = F.log_softmax(model.W_out(hv), dim=-1)
+    nll = F.nll_loss(lp.reshape(-1, lp.size(-1)), S_batch.reshape(-1),
+                     reduction="none").view(B, -1)
+    return -(nll * mask).sum(-1)
+
+
 # ----------------------------------------------------------------------------- labels
 def interface_labels(ctx, pdb_path, entity1, cut=CUT):
     """Per-slot interface label in tied_featurize packing order. No WT alignment needed:
@@ -111,18 +143,23 @@ def weighted_bce(logit, y, w_pos):
     return (F.binary_cross_entropy_with_logits(logit, y, reduction="none") * w).sum() / w.sum()
 
 
-def run_ttt(model, ctx, y, ok, args, log):
+def run_ttt(model, ctx, y, ok, S_all, sf_per_m, sf_mean, args, log):
+    """sf_per_m: (M, N) frozen scores per decoding order; sf_mean: (N,) their mean.
+
+    var() for the normaliser comes from sf_mean -- the quantity the benchmark reports -- so
+    lambda stays comparable across assays whose score scale differs ~3.3x.
+    """
     dev = ctx.device
     okt = torch.as_tensor(ok, device=dev)
     yt = torch.as_tensor(y[ok], device=dev)
     pi = float(y[ok].mean())
     w_pos = (1.0 - pi) / max(pi, 1e-9)
-    nok = int(ok.sum())
 
+    sf_m = torch.as_tensor(sf_per_m, device=dev, dtype=torch.float32)     # (M, N)
+    var_sf = float(np.var(sf_mean))
     with torch.no_grad():
-        hV0, hE0 = encoder_forward(model, ctx)
-    hV0, hE0 = hV0.detach(), hE0.detach()
-    K = hE0.shape[2]
+        hV0, _ = encoder_forward(model, ctx)
+    hV0 = hV0.detach()
 
     head = nn.Linear(hV0.shape[-1], 1).to(dev)
     # (i) fit the head on the FROZEN h_V first: a randomly initialised head would pour
@@ -139,18 +176,31 @@ def run_ttt(model, ctx, y, ok, args, log):
     ps = trainable_encoder_params(model, args.train_features)
     log["n_trainable"] = int(sum(p.numel() for p in ps))
     opt = torch.optim.AdamW(list(ps) + list(head.parameters()), lr=args.lr)
+    rng = np.random.RandomState(args.seed)       # numpy, so the CUDA RNG is left untouched
+    n = len(S_all)
     hist = []
     for step in range(args.steps):
         hV, hE = encoder_forward(model, ctx)
         l_probe = weighted_bce(head(hV[0][okt]).squeeze(-1), yt, w_pos)
-        a_V = ((hV[0][okt] - hV0[0][okt]) ** 2).sum() / (nok * hV0.shape[-1])
-        a_E = ((hE[0][okt] - hE0[0][okt]) ** 2).sum() / (nok * K * hE0.shape[-1])
-        loss = l_probe + args.lam * (a_V + a_E)
+        # anchor on the OUTPUT: sample a batch of this assay's variants and score them
+        # through the decoder with the current encoder. Transductive -- sequences only,
+        # never DMS_score.
+        sel = rng.choice(n, size=min(args.anchor_batch, n), replace=False)
+        ms = [int(rng.randint(ctx.M))] if args.anchor_M == 1 else list(range(ctx.M))
+        st = 0.0
+        for mm in ms:
+            st = st + score_with(ctx, model, hV, hE, S_all[sel], mm)
+        st = st / len(ms)
+        # compare against the SAME decoding order(s), so the anchor is exactly 0 at step 0
+        ref = sf_m[ms][:, sel].mean(0)
+        l_anchor = ((st - ref) ** 2).mean() / var_sf
+        loss = l_probe + args.lam * l_anchor
         opt.zero_grad(); loss.backward(); opt.step()
         if step % max(1, args.steps // 10) == 0 or step == args.steps - 1:
-            hist.append(dict(step=step, probe=float(l_probe), anchor_V=float(a_V),
-                             anchor_E=float(a_E), total=float(loss)))
-    log["pi"] = pi; log["w_pos"] = w_pos; log["n_ok"] = nok; log["L"] = int(len(y))
+            hist.append(dict(step=step, probe=float(l_probe), anchor=float(l_anchor),
+                             total=float(loss)))
+    log["pi"] = pi; log["w_pos"] = w_pos; log["n_ok"] = int(ok.sum()); log["L"] = int(len(y))
+    log["var_s_frozen"] = var_sf
     log["hist"] = hist
     return head
 
@@ -188,6 +238,25 @@ def score_all(ctx, S, batch):
     return torch.cat(out).numpy()
 
 
+@torch.no_grad()
+def score_all_per_m(ctx, S, batch):
+    """(M, N) frozen scores, one row per decoding order.
+
+    The anchor must compare like with like. The reported score averages M orders, but a
+    training step samples ONE order, and a single order differs from the M-average by far
+    more than training ever moves it -- anchoring the single order against the average makes
+    the model chase 'imitate the M-average' instead of 'stay near the pretrained score'.
+    Measured at step 0, where the anchor must be exactly 0: it was 0.845.
+    """
+    rows = []
+    for m in range(ctx.M):
+        vals = []
+        for i in range(0, len(S), batch):
+            vals.append(ctx.score(S[i:i + batch], m_idx=m).float().cpu())
+        rows.append(torch.cat(vals))
+    return torch.stack(rows).numpy()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--assays", nargs="*", default=None)
@@ -197,6 +266,10 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--steps", type=int, default=150)
     ap.add_argument("--lam", type=float, default=1.0)
+    ap.add_argument("--anchor_batch", type=int, default=32,
+                    help="variants per step used for the score anchor")
+    ap.add_argument("--anchor_M", type=int, default=1,
+                    help="decoding orders per training step (1 = sample one, else all M)")
     ap.add_argument("--head_lr", type=float, default=1e-2)
     ap.add_argument("--head_steps", type=int, default=300)
     ap.add_argument("--train_features", action="store_true")
@@ -244,7 +317,8 @@ def main():
         if a.limit:                                    # smoke only -- never for reported runs
             df = df.head(a.limit).copy()
         S = torch.stack([ctx.seq_to_S(eval(s)) for s in df["mutated_sequence"]])
-        base = score_all(ctx, S, a.batch)
+        sf_per_m = score_all_per_m(ctx, S, a.batch)      # (M, N)
+        base = sf_per_m.mean(0)                          # == ctx.score() averaged over M
         keep = df["DMS_score"].notna().to_numpy()
         rho_base = stats.spearmanr(base[keep], df["DMS_score"].to_numpy()[keep]).correlation
 
@@ -258,7 +332,7 @@ def main():
             with torch.no_grad():
                 hV_before, _ = encoder_forward(model, ctx)
             q_before = probe_apnorm(hV_before[0].float().cpu().numpy(), y, ok)
-        run_ttt(model, ctx, y, ok, a, log)
+        run_ttt(model, ctx, y, ok, S, sf_per_m, base, a, log)
         # REBUILD the whole cache from the trained weights: h_E changed too, and set_h_V()
         # would silently keep the stale one.
         ctx2 = AssayContext(model, pdb, df["chain_id"].values[0], a.M, dev, randn=randn)

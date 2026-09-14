@@ -1,0 +1,9 @@
+Copied 2026-09-14 from worktree bindingGYM-binding-sites-analysis (commit 60daa59),
+per ibex-usage §1c-3 (data locality: copy inputs INTO the working branch).
+
+entity_partition.csv    <- local-records/binding-sites-analysis/data/
+                           metadata-derived entity split; `provenance` column gives each row's source
+g1e_canonical14.csv     <- workstation-records/mutation-landscape-TTT/data/
+                           the 14-assay basis + per-assay rho_base (zero-shot Spearman)
+ga2_encoder_probe.csv   <- same; frozen-encoder probe per assay (AUC / AP_norm / rho_w)
+ga2_coverage.csv        <- same; per-assay count of gap-padded slots

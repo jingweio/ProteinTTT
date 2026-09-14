@@ -142,3 +142,4 @@ ibex-records/**/*.out
 ibex-records/**/*.err
 ibex-records/**/results/*.csv
 ibex-records/**/results/*.pkl
+ibex-records/**/data/*.json

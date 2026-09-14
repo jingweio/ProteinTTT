@@ -47,6 +47,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--mode", default="decoder")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--n_cap", type=int, default=None,
+                    help="cap the variant list; the footprint depends on (bs, L), not n")
     a = ap.parse_args()
     dev = torch.device("cuda")
     assert "A100" in torch.cuda.get_device_name(0), torch.cuda.get_device_name(0)
@@ -55,7 +57,7 @@ def main():
     print(f"card {torch.cuda.get_device_name(0)}  total {tot:.1f} GiB  "
           f"free-at-start {(tot - torch.cuda.memory_reserved() / GB):.1f} GiB\n")
     for dms in a.assays:
-        ctx, S, _ = build(dms, model, a.M, a.seed, dev)
+        ctx, S, _ = build(dms, model, a.M, a.seed, dev, n_cap=a.n_cap)
         formula = max(8, min(128, int(3.0e8 / (ctx.L * 48 * 256))))
         print(f"=== {dms}  L={ctx.L}  n={len(S)}  formula bs={formula}")
         print(f"{'bs':>6s} {'s/step':>8s} {'peak alloc GiB':>15s} {'peak resv GiB':>14s}")

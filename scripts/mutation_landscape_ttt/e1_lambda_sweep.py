@@ -32,13 +32,19 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 OUT = f"{ROOT}/workstation-records/mutation-landscape-TTT/data"
 
 
-def build(dms, model, M, seed, dev):
-    """Frozen context + variant tensors for one assay. Single (POI, chain_id) group only."""
+def build(dms, model, M, seed, dev, n_cap=None):
+    """Frozen context + variant tensors for one assay. Single (POI, chain_id) group only.
+
+    n_cap truncates the variant list. ONLY for the memory probe, whose footprint depends on
+    (batch, L) and not on n -- the returned df is then not the assay's, so never pass it here.
+    """
     r = pd.read_csv(f"{BG}/input/BindingGYM.csv").query("DMS_id == @dms").iloc[0]
     df = pd.read_csv(f"{BG}/input/Binding_substitutions_DMS/{r.DMS_filename}")
     df["chain_id"] = df["chain_id"].fillna("")
     groups = df.groupby(["POI", "chain_id"])
     assert len(groups) == 1, f"{dms}: {len(groups)} (POI, chain_id) groups, not handled here"
+    if n_cap:
+        df = df.iloc[:n_cap]
     torch.manual_seed(seed); random.seed(seed); np.random.seed(seed)
     ctx = AssayContext(model, f"{BG}/input/structures/{r.pdb_file}", df['chain_id'].values[0], M, dev)
     S = torch.stack([ctx.seq_to_S(eval(s)) for s in df["mutated_sequence"]])
@@ -68,17 +74,25 @@ def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=Non
     var_f = float(s_frozen.mean(1).var())
     g = torch.Generator().manual_seed(seed)
 
-    # stratified minibatches: a batch whose w has no spread gives L_div no gradient
+    # Stratified minibatches: L_div is a WITHIN-BATCH Pearson, so a batch whose w has no
+    # spread gives it no gradient direction. w here is already variant-level (max/sum over the
+    # variant's mutated sites), and the bins are QUANTILES of this assay's own w -- equal-width
+    # bins on [0,1] would be useless, since w = exp(-d/5A) never reaches 0.6 (that is d = 2.55 A).
     bins = np.digitize(w, np.quantile(w, [.2, .4, .6, .8]))
     by_bin = [np.where(bins == b)[0] for b in range(5)]
-    by_bin = [b for b in by_bin if len(b)]
+    by_bin = [b for b in by_bin if len(b)]          # ties in w can collapse a quantile boundary
     per = max(1, bs // len(by_bin))
+    # sampling is WITHOUT replacement, so every training step sees `per` DISTINCT variants per
+    # bin; duplicates would enter L_div's Pearson twice and L_anchor's mean twice.
+    assert min(len(b) for b in by_bin) >= per, \
+        f"bin too small for {per}/step without replacement: {[len(b) for b in by_bin]}"
+
     wt = torch.tensor(w, dtype=torch.float32, device=dev)
     sf = s_frozen.to(dev)
 
     ctx.model.train()
     for step in range(steps):
-        ix = np.concatenate([b[torch.randint(len(b), (per,), generator=g).numpy()] for b in by_bin])
+        ix = np.concatenate([b[torch.randperm(len(b), generator=g)[:per].numpy()] for b in by_bin])
         m = int(torch.randint(ctx.M, (1,), generator=g))
         s = ctx.score(S[ix], m_idx=m)
         ws = (wt[ix] - wt[ix].mean()) / (wt[ix].std() + 1e-8)

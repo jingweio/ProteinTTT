@@ -9,9 +9,32 @@
 
 ## 1. 运行日志
 
-| 日期 | 任务 | PID | wall | 配置 | 产出 | 结果 |
+| 日期 | 任务 | SLURM job | wall | 配置 | 产出 | 结果 |
 |---|---|---|---|---|---|---|
-| — | 尚未开跑 | | | | | |
+| 2026-09-14 | **T0 no-op gate**（ibex 首个作业） | **51886003** | — | `--steps 0 --M 5 --seed 1 --batch 64`，3 个 pilot assay | `ibex-records/structure-encoder-TTT/data/t0_noop_per_assay.csv` | ⏳ PENDING (Priority) |
+
+**T0 一次验四件事**：① a100 + `torch 1.13.1+cu117` 在该节点驱动上能真正 launch kernel；
+② ckpt md5 断言通过；③ `--steps 0` 时分数与 baseline **逐行相同**（容差 1e-6）；
+④ baseline ρ 与 `refs/g1e_canonical14.csv` 记录的 `rho_base` 对齐 —— 换平台后数值是否一致，这一栏说了算。
+
+- sbatch: 本地 `ibex-records/structure-encoder-TTT/sh/t0_noop_gate_20260914-155239.sh`
+  ／ ibex `/ibex/user/guoj0f/ProteinTTT/structure-encoder-TTT/ibex-records/structure-encoder-TTT/sh/`
+- synced_commit: `35eac4c`（`.synced_commit` 已随代码同步，作业首行会打印）
+- env `bgym-official`；代码目录 `/ibex/user/guoj0f/ProteinTTT/structure-encoder-TTT/`
+
+### 本地 smoke（A4500，**仅 sanity check，永不上报** —— ibex-usage Notes）
+
+2026-09-14，`proteingym-ttt` env（torch 2.4.1），`PSD95_CRIPT_1BE9`，`--limit` 截断：
+
+| 配置 | 结果 |
+|---|---|
+| `--steps 0 --limit 300 --M 2` | **NO-OP GATE PASS，max\|Δscore\| = 0.000e+00** |
+| 同上 | 标签的 `pi=0.167` 与 proposal 表里 PSD95_CRIPT 的界面占比**精确吻合** ⇒ 标签构建走对了 |
+| `--steps 60 --lr 1e-4 --lam 1.0 --limit 400 --M 2` | 跑通；probe loss **0.1303 → 0.0020**（60 步），anchor_V 2.6e-3 / anchor_E 3.6e-4 |
+
+🔴 **smoke 暴露的问题：λ=1 几乎不构成约束。** probe loss 两个数量级的下降 vs anchor 停在 1e-3/1e-4
+⇒ 目标比 λ=1 所能约束的**容易拟合得多**（PSD95 只有 120 个残基，128 维特征 + 可训练 encoder，且无留出集）。
+**P2 的 λ 扫描范围要整体上移**（原计划 `{0.1, 1, 10}` 恐怕整段偏小）。由 pilot 定，不在此处拍板。
 
 ---
 

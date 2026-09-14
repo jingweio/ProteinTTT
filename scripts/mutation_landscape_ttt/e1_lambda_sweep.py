@@ -65,8 +65,15 @@ def spearman(a, b):
     return stats.spearmanr(a, b).statistic
 
 
-def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=None, eval_M=None):
-    """One TTT run. Returns per-variant scores at M=5 after training."""
+def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=None, eval_M=None,
+            eval_at=None):
+    """One TTT run. Returns {step: per-variant scores}.
+
+    eval_at reads the model out at several step counts DURING one run, so the whole
+    step axis costs one training trajectory instead of one run per budget. It is the
+    same trajectory, so the rows it produces are exactly nested -- step 300 here is the
+    step-300 model, not a separate run that happened to stop there.
+    """
     sd0 = ctx.model.state_dict()
     state = {k: v.detach().clone() for k, v in sd0.items()}
     ps = set_trainable(ctx.model, mode)
@@ -90,6 +97,19 @@ def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=Non
     wt = torch.tensor(w, dtype=torch.float32, device=dev)
     sf = s_frozen.to(dev)
 
+    eval_at = sorted({min(int(e), steps) for e in (eval_at or [steps])})
+    scores = {}
+
+    def read_out():
+        ctx.model.eval()
+        ms = range(ctx.M if eval_M is None else min(eval_M, ctx.M))
+        with torch.no_grad():
+            o = torch.empty(len(S))
+            for i in range(0, len(S), 64):
+                o[i:i + 64] = ctx.score(S[i:i + 64], m_idx=ms).float().cpu()
+        ctx.model.train()
+        return o.numpy()
+
     ctx.model.train()
     for step in range(steps):
         ix = np.concatenate([b[torch.randperm(len(b), generator=g)[:per].numpy()] for b in by_bin])
@@ -103,15 +123,11 @@ def run_one(ctx, S, w, y, s_frozen, lam, lr, steps, bs, mode, dev, seed, log=Non
         opt.zero_grad(); loss.backward(); opt.step()
         if log is not None and (step % 50 == 0 or step == steps - 1):
             log.append(dict(lam=lam, step=step, l_div=float(l_div), l_anchor=float(l_anc)))
+        if step + 1 in eval_at:
+            scores[step + 1] = read_out()
     ctx.model.eval()
-
-    ms = range(ctx.M if eval_M is None else min(eval_M, ctx.M))
-    with torch.no_grad():
-        out = torch.empty(len(S))
-        for i in range(0, len(S), 64):
-            out[i:i + 64] = ctx.score(S[i:i + 64], m_idx=ms).float().cpu()
     ctx.model.load_state_dict(state)          # restore: every lambda starts from pretrained
-    return out.numpy()
+    return scores
 
 
 def main():
@@ -130,6 +146,9 @@ def main():
                     help="cheaper M for the sweep itself; the best lambda is re-evaluated at --M. "
                          "The sweep only needs the SHAPE of the curve; only the number that gets "
                          "compared to the 0.4850 bar needs the baseline's M=5.")
+    ap.add_argument("--eval_at", nargs="+", type=int, default=None,
+                    help="read the model out at these step counts within each run "
+                         "(default: only --steps)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--permute_d", action="store_true", help="E-3 null: shuffle d within assay")
     ap.add_argument("--tag", default="e1")
@@ -180,42 +199,49 @@ def main():
             w_var = w_var[np.random.default_rng(a.seed).permutation(len(w_var))]
 
         log = []
+        sf_mean = sf_v.mean(1).numpy()
+        cw_before = float(np.corrcoef(w_var, sf_mean)[0, 1])
         for lam in a.lams:
-            sc = run_one(ctx, S_v, w_var, y, sf_v, lam, a.lr, a.steps, bs_eff,
-                         a.mode, dev, a.seed, log, eval_M=a.sweep_eval_M)
-            rho = spearman(sc, y)
-            corr_w = float(np.corrcoef(w_var, sc)[0, 1])
-            rows.append(dict(DMS_id=dms, lam=lam, rho=rho, rho_base=base5,
-                             gain=rho - base5, corr_w_after=corr_w,
-                             corr_w_before=float(np.corrcoef(w_var, sf_v.mean(1).numpy())[0, 1]),
-                             ds_rms=float(np.sqrt(((sc - sf_v.mean(1).numpy()) ** 2).mean()))))
-            preds[f"{dms}|{lam}"] = sc
-            print(f"{dms:38s} lam={lam:<6g} rho={rho:.4f} (base {base5:.4f}, "
-                  f"{rho-base5:+.4f})  corr(w,s) {rows[-1]['corr_w_before']:+.3f}->{corr_w:+.3f}",
-                  flush=True)
+            scs = run_one(ctx, S_v, w_var, y, sf_v, lam, a.lr, a.steps, bs_eff,
+                          a.mode, dev, a.seed, log, eval_M=a.sweep_eval_M, eval_at=a.eval_at)
+            for st_i, sc in sorted(scs.items()):
+                rho = spearman(sc, y)
+                rows.append(dict(DMS_id=dms, lam=lam, step=st_i, rho=rho, rho_base=base5,
+                                 gain=rho - base5,
+                                 corr_w_after=float(np.corrcoef(w_var, sc)[0, 1]),
+                                 corr_w_before=cw_before,
+                                 ds_rms=float(np.sqrt(((sc - sf_mean) ** 2).mean()))))
+                preds[f"{dms}|{lam}|s{st_i}"] = sc
+                print(f"{dms:38s} lam={lam:<6g} step={st_i:<5d} rho={rho:.4f} "
+                      f"(base {base5:.4f}, {rho-base5:+.4f})", flush=True)
             flush()          # one assay dying must not cost the assays already finished
         curves += log
         if a.sweep_eval_M < a.M:   # re-score the winner at the full evaluation M
-            best_lam = max((r for r in rows if r["DMS_id"] == dms), key=lambda r: r["rho"])["lam"]
+            best = max((r for r in rows if r["DMS_id"] == dms and not r.get("final_M")),
+                       key=lambda r: r["rho"])
             # the context is already at --M, so the winner is retrained under the SAME regime
             # it was ranked under; same seed => same trajectory, only the read-out widens.
-            sc = run_one(ctx, S_v, w_var, y, sf_v, best_lam,
-                         a.lr, a.steps, bs_eff, a.mode, dev, a.seed, eval_M=a.M)
-            preds[f"{dms}|{best_lam}|M{a.M}"] = sc
-            rows.append(dict(DMS_id=dms, lam=best_lam, rho=spearman(sc, y), rho_base=base5,
-                             gain=spearman(sc, y) - base5, corr_w_after=float(np.corrcoef(w_var, sc)[0, 1]),
-                             corr_w_before=float(np.corrcoef(w_var, sf_v.mean(1).numpy())[0, 1]),
-                             ds_rms=float(np.sqrt(((sc - sf_v.mean(1).numpy()) ** 2).mean())),
-                             final_M=a.M))
-            print(f"{dms:38s} lam*={best_lam:<6g} FINAL M={a.M} rho={rows[-1]['rho']:.4f} "
-                  f"({rows[-1]['gain']:+.4f})", flush=True)
+            scs = run_one(ctx, S_v, w_var, y, sf_v, best["lam"],
+                          a.lr, a.steps, bs_eff, a.mode, dev, a.seed, eval_M=a.M,
+                          eval_at=a.eval_at)
+            for st_i, sc in sorted(scs.items()):
+                preds[f"{dms}|{best['lam']}|s{st_i}|M{a.M}"] = sc
+                rows.append(dict(DMS_id=dms, lam=best["lam"], step=st_i, rho=spearman(sc, y),
+                                 rho_base=base5, gain=spearman(sc, y) - base5,
+                                 corr_w_after=float(np.corrcoef(w_var, sc)[0, 1]),
+                                 corr_w_before=cw_before,
+                                 ds_rms=float(np.sqrt(((sc - sf_mean) ** 2).mean())),
+                                 final_M=a.M))
+                print(f"{dms:38s} lam*={best['lam']:<6g} step={st_i:<5d} FINAL M={a.M} "
+                      f"rho={rows[-1]['rho']:.4f} ({rows[-1]['gain']:+.4f})"
+                      + ("  <- ranked best" if st_i == best["step"] else ""), flush=True)
         flush()
         print(f"  [{dms}] L={ctx.L} n={len(keep)} bs={bs_eff} sweepEvalM={a.sweep_eval_M} "
               f"base(M=5) {base5:.4f}  {time.time()-t0:.0f}s", flush=True)
 
     flush(); t = pd.DataFrame(rows)
     print("\n=== lambda sweep ===")
-    print(t.pivot_table(index="lam", columns="DMS_id", values="gain")
+    print(t.pivot_table(index=["lam", "step"], columns="DMS_id", values="gain")
           .to_string(float_format=lambda x: f"{x:+.4f}"))
     print("\nper-assay best lambda:")
     for dms, g_ in t.groupby("DMS_id"):

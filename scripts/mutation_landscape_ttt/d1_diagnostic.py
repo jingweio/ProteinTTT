@@ -28,10 +28,18 @@ def main(tag="e1", suf="", agg="max"):
     lab = pd.read_parquet(f"{ROOT}/local-records/binding-sites-analysis-pred/data/variant_labels_with_mpnn.parquet")
     sdt = pd.read_parquet(f"{ROOT}/local-records/binding-sites-analysis/data/variant_site_dists.parquet")
 
-    rows = []
+    rows, missed = [], 0
     for _, r in sw.iterrows():
-        key = f"{r.DMS_id}|{r.lam}"
-        if key not in pr: continue
+        # key layout grew a step (and an M) field when the sweep started reading the model out
+        # mid-run; try the richest form first. A silent `continue` here once produced an empty
+        # table that looked like "no rows qualified", so misses are counted and asserted on.
+        cand = [f"{r.DMS_id}|{r.lam}"]
+        if "step" in sw.columns and not pd.isna(r.get("step")):
+            base = f"{r.DMS_id}|{r.lam}|s{int(r.step)}"
+            cand = ([f"{base}|M{int(r.final_M)}"] if not pd.isna(r.get("final_M")) else []) + [base] + cand
+        key = next((k for k in cand if k in pr), None)
+        if key is None:
+            missed += 1; continue
         s_new = pr[key]
         g = lab[lab.DMS_id == r.DMS_id]
         s_old = g.mpnn_score.to_numpy(float)      # the official frozen score, seed 1 / M=5
@@ -58,6 +66,8 @@ def main(tag="e1", suf="", agg="max"):
                                               (np.sqrt((ds ** 2).mean()) or 1.0)),
                          rho_resid_y=stats.spearmanr(resid, y).statistic))
     t = pd.DataFrame(rows)
+    assert missed == 0 or len(rows), f"no sweep row matched a preds key ({missed} missed)"
+    if missed: print(f"[warn] {missed} sweep rows had no preds entry")
     t.to_csv(f"{OUT}/d1_diagnostic{suf}.csv", index=False)
     pd.set_option("display.width", 220)
     print("=== D-1: is the learned shift just c*w? ===")
